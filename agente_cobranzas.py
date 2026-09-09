@@ -72,7 +72,8 @@ def procesar_y_responder(data):
             return
             
         mensaje_info = valor['messages'][0]
-        numero_cliente = valor['contacts'][0]['wa_id']
+        contacto = valor.get('contacts', [{}])[0]
+        numero_cliente = mensaje_info.get('from') or contacto.get('wa_id') or mensaje_info.get('from_user_id')
         tipo_mensaje = mensaje_info.get('type', 'desconocido')
         
         # Filtro 2: Si envían audios, imágenes o stickers, avisamos que no los leemos
@@ -142,7 +143,7 @@ def procesar_y_responder(data):
 
 def enviar_mensaje_whatsapp(numero_destino, texto):
     """Envía el texto generado de vuelta al WhatsApp del cliente."""
-    url = f"https://graph.facebook.com/v17.0/{ID_NUMERO_TELEFONO}/messages"
+    url = f"https://graph.facebook.com/v20.0/{ID_NUMERO_TELEFONO}/messages"
     headers = {"Authorization": f"Bearer {TOKEN_META}", "Content-Type": "application/json"}
     
     respuesta = requests.post(url, headers=headers, json={
