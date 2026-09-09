@@ -92,28 +92,25 @@ def guardar_auditoria(numero, remitente, mensaje):
         print(f"❌ Error guardando auditoría: {e}", flush=True)
 
 def guardar_anotacion_crm(numero, nota):
-    """Guarda las etiquetas de la IA directamente en gestiones_cartera"""
+    """Guarda las etiquetas de la IA directamente usando la cédula del deudor"""
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # Buscamos la obligación activa de este celular
-                cur.execute("""
-                    SELECT o.id FROM obligaciones o
-                    JOIN contactos c ON o.identificacion_deudor = c.identificacion
-                    WHERE c.telefono = %s AND o.estado != 'Pagada' LIMIT 1
-                """, (numero,))
+                # 1. Buscamos la cédula cruzando con el celular
+                cur.execute("SELECT identificacion FROM contactos WHERE telefono = %s LIMIT 1", (numero,))
                 res = cur.fetchone()
                 
                 if res:
-                    id_obligacion = res[0]
-                    # Extraemos fecha si el formato es AAAA-MM-DD
+                    cedula = res[0]
+                    # 2. Extraemos la fecha de la promesa si existe
                     fecha_match = re.search(r'\d{4}-\d{2}-\d{2}', nota)
                     fecha_promesa = fecha_match.group(0) if fecha_match else None
                     
+                    # 3. Guardamos la gestión atada a la cédula
                     cur.execute("""
-                        INSERT INTO gestiones_cartera (id_obligacion, tipo_contacto, resumen, promesa_pago_fecha, usuario) 
+                        INSERT INTO gestiones_cartera (identificacion_deudor, tipo_contacto, resumen, promesa_pago_fecha, usuario) 
                         VALUES (%s, %s, %s, %s, %s)
-                    """, (id_obligacion, 'WhatsApp IA', nota, fecha_promesa, 'Bot Claude'))
+                    """, (cedula, 'WhatsApp IA', nota, fecha_promesa, 'Bot Claude'))
     except Exception as e:
         print(f"❌ Error guardando en CRM: {e}", flush=True)
 
