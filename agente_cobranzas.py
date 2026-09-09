@@ -91,28 +91,23 @@ def guardar_auditoria(numero, remitente, mensaje):
     except Exception as e:
         print(f"❌ Error guardando auditoría: {e}", flush=True)
 
-def guardar_anotacion_crm(numero, nota):
-    """Guarda las etiquetas de la IA directamente usando la cédula del deudor"""
+def guardar_anotacion_crm(cedula, nota):
+    """Guarda la etiqueta usando EXCLUSIVAMENTE la cédula negociada en el chat"""
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # 1. Buscamos la cédula cruzando con el celular
-                cur.execute("SELECT identificacion FROM contactos WHERE telefono = %s LIMIT 1", (numero,))
-                res = cur.fetchone()
+                # Extraemos la fecha de la promesa si existe
+                fecha_match = re.search(r'\d{4}-\d{2}-\d{2}', nota)
+                fecha_promesa = fecha_match.group(0) if fecha_match else None
                 
-                if res:
-                    cedula = res[0]
-                    # 2. Extraemos la fecha de la promesa si existe
-                    fecha_match = re.search(r'\d{4}-\d{2}-\d{2}', nota)
-                    fecha_promesa = fecha_match.group(0) if fecha_match else None
-                    
-                    # 3. Guardamos la gestión atada a la cédula
-                    cur.execute("""
-                        INSERT INTO gestiones_cartera (identificacion_deudor, tipo_contacto, resumen, promesa_pago_fecha, usuario) 
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (cedula, 'WhatsApp IA', nota, fecha_promesa, 'Bot Claude'))
+                # Guardamos la gestión atada a la cédula de forma directa
+                cur.execute("""
+                    INSERT INTO gestiones_cartera (identificacion_deudor, tipo_contacto, resumen, promesa_pago_fecha, usuario) 
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (cedula, 'WhatsApp IA', nota, fecha_promesa, 'Bot Claude'))
+                print(f"✅ [ÉXITO] Promesa guardada en Neon para la cédula: {cedula}", flush=True)
     except Exception as e:
-        print(f"❌ Error guardando en CRM: {e}", flush=True)
+        print(f"❌ [ERROR CRÍTICO] Falló el guardado en CRM: {e}", flush=True)
 
 # ==========================================
 # ⚙️ LÓGICA DEL SERVIDOR Y WHATSAPP
