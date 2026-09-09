@@ -1,0 +1,6 @@
+Flask
+requests
+anthropic
+psycopg2-binary
+python-dotenv
+gunicorn
