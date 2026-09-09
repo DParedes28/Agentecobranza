@@ -132,7 +132,17 @@ def recibir_mensajes():
 def enviar_mensaje_whatsapp(numero_destino, texto):
     url = f"https://graph.facebook.com/v17.0/{ID_NUMERO_TELEFONO}/messages"
     headers = {"Authorization": f"Bearer {TOKEN_META}", "Content-Type": "application/json"}
-    requests.post(url, headers=headers, json={"messaging_product": "whatsapp", "to": numero_destino, "type": "text", "text": {"body": texto}})
+    
+    # Guardamos la respuesta que nos da Meta
+    respuesta = requests.post(url, headers=headers, json={
+        "messaging_product": "whatsapp", 
+        "to": numero_destino, 
+        "type": "text", 
+        "text": {"body": texto}
+    })
+    
+    # 🚨 Imprimimos en la consola de Render el motivo exacto del rechazo
+    print(f"📡 RESPUESTA DE META AL ENVIAR: {respuesta.status_code} - {respuesta.text}", flush=True)
 
 if __name__ == '__main__':
     print("🚀 SERVIDOR CON CLAUDE 3.5 HAIKU Y DB NEON ENCENDIDO...")
