@@ -64,47 +64,40 @@ def recibir_mensajes():
 def procesar_y_responder(data):
     """Función de segundo plano que lee, piensa y responde."""
     try:
-        # 1. Extraemos la información del JSON
         valor = data['entry'][0]['changes'][0]['value']
         
-        # 🛡️ NUEVO FILTRO 1: Ignorar estrictamente cualquier evento que no sea de WhatsApp
         if valor.get('messaging_product') != 'whatsapp':
-            print("⚠️ Evento descartado: El payload no proviene de WhatsApp.", flush=True)
             return
-        
-        # Filtro original: Si Meta solo nos avisa que el mensaje fue "leído" o "entregado", lo ignoramos
+            
         if 'messages' not in valor:
             return
             
         mensaje_info = valor['messages'][0]
         contacto = valor.get('contacts', [{}])[0]
         
-       # 1. Extraer el ID: Buscamos primero el número normal, y si está oculto, capturamos el ID técnico
         numero_cliente = mensaje_info.get('from') or contacto.get('wa_id') or mensaje_info.get('from_user_id') or contacto.get('user_id')
         
-        # 2. Validación flexible: Solo verificamos que exista un ID (sea número estándar o código alfanumérico técnico)
         if not numero_cliente:
             print("⚠️ Evento descartado: No se pudo extraer ningún identificador del cliente.", flush=True)
             return
             
+        # 💡 NUEVO: Capturar el ID exacto del mensaje entrante (el wamid)
+        id_mensaje_entrante = mensaje_info.get('id')
+        
         tipo_mensaje = mensaje_info.get('type', 'desconocido')
         
-        # Filtro original: Si envían audios, imágenes o stickers, avisamos que no los leemos
         if tipo_mensaje != 'text':
             print(f"⚠️ El {numero_cliente} envió formato no soportado: {tipo_mensaje}", flush=True)
-            enviar_mensaje_whatsapp(numero_cliente, "Hola. Soy el asistente virtual del despacho. Por favor, escríbeme tu mensaje exclusivamente en texto. 🤖")
+            enviar_mensaje_whatsapp(numero_cliente, "Hola. Soy el asistente virtual del despacho. Por favor, escríbeme tu mensaje exclusivamente en texto. 🤖", id_mensaje_entrante)
             return
             
-        # 2. Si es texto, sacamos el cuerpo del mensaje
         texto_recibido = mensaje_info['text']['body']
         
-        # Creamos historial si es un cliente nuevo en esta sesión
         if numero_cliente not in memoria_chats:
             memoria_chats[numero_cliente] = []
             
         print(f"\n🗣️ DEUDOR ({numero_cliente}): {texto_recibido}", flush=True)
         
-        # 3. Buscamos cédulas en el texto para revisar deudas en Neon
         posible_cedula = re.search(r'\b\d{7,11}\b', texto_recibido)
         contexto_financiero = buscar_deuda_en_neon(posible_cedula.group(0)) if posible_cedula else ""
             
@@ -112,10 +105,7 @@ def procesar_y_responder(data):
         if contexto_financiero:
             anotacion_usuario += f"\n[SISTEMA INTERNO: {contexto_financiero}]"
             
-        # Guardamos en la memoria RAM
         memoria_chats[numero_cliente].append(anotacion_usuario)
-        
-        # Tomamos solo los últimos 8 mensajes para no saturar a Claude
         historial_reciente = "\n".join(memoria_chats[numero_cliente][-8:])
         
         instruccion_secreta = (
@@ -124,7 +114,6 @@ def procesar_y_responder(data):
             "Genera la respuesta para el deudor basándote en este historial y tus reglas."
         )
 
-        # 4. Hablamos con Claude
         respuesta_ia = cliente_ia.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -147,28 +136,36 @@ def procesar_y_responder(data):
         respuesta_texto = respuesta_ia.content[0].text
         print(f"🤖 CLAUDE RESPONDE: {respuesta_texto}", flush=True)
         
-        # 5. Guardamos nuestra respuesta y la enviamos a WhatsApp
         memoria_chats[numero_cliente].append(f"Tú respondiste: {respuesta_texto}")
-        enviar_mensaje_whatsapp(numero_cliente, respuesta_texto)
+        
+        # 💡 NUEVO: Pasamos el id_mensaje_entrante a la función de envío
+        enviar_mensaje_whatsapp(numero_cliente, respuesta_texto, id_mensaje_entrante)
         
     except Exception as e:
         print(f"❌ Error interno procesando el mensaje: {e}", flush=True)
 
-def enviar_mensaje_whatsapp(numero_destino, texto):
+# 💡 NUEVO: Modificamos la función para recibir el ID y armar el contexto
+def enviar_mensaje_whatsapp(numero_destino, texto, id_mensaje_entrante=None):
     """Envía el texto generado de vuelta al WhatsApp del cliente."""
     url = f"https://graph.facebook.com/v20.0/{ID_NUMERO_TELEFONO}/messages"
     headers = {"Authorization": f"Bearer {TOKEN_META}", "Content-Type": "application/json"}
     
-    # 🚨 NUEVO LOG: Validamos el destino final antes de impactar la API de Meta
-    print(f"📤 INTENTANDO ENVIAR MENSAJE A: {numero_destino}", flush=True)
-    
-    respuesta = requests.post(url, headers=headers, json={
+    payload = {
         "messaging_product": "whatsapp", 
         "to": numero_destino, 
         "type": "text", 
         "text": {"body": texto}
-    })
+    }
     
+    # 🛡️ LA SOLUCIÓN: Si tenemos el ID del mensaje del usuario, enviamos la respuesta como un "Reply" en hilo
+    if id_mensaje_entrante:
+        payload["context"] = {
+            "message_id": id_mensaje_entrante
+        }
+    
+    print(f"📤 INTENTANDO ENVIAR MENSAJE A: {numero_destino} (Con contexto: {bool(id_mensaje_entrante)})", flush=True)
+    
+    respuesta = requests.post(url, headers=headers, json=payload)
     print(f"📡 RESPUESTA DE META AL ENVIAR: {respuesta.status_code} - {respuesta.text}", flush=True)
 
 if __name__ == '__main__':
