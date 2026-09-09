@@ -202,8 +202,17 @@ def procesar_y_responder(data):
         etiqueta = re.search(r'\[NOTA_CRM:(.*?)\]', respuesta_cruda)
         if etiqueta:
             nota_secreta = etiqueta.group(1).strip()
-            # Guardamos la etiqueta en el CRM y recortamos el mensaje para el usuario
-            guardar_anotacion_crm(numero_cliente, nota_secreta)
+            
+            # 🛑 NUEVA INTELIGENCIA: Buscar la cédula en la memoria del chat
+            historial_texto = "\n".join(memoria_chats[numero_cliente])
+            todas_las_cedulas = re.findall(r'\b\d{7,11}\b', historial_texto)
+            
+            if todas_las_cedulas:
+                cedula_activa = todas_las_cedulas[-1] # Tomamos la ÚLTIMA cédula de la que se habló
+                guardar_anotacion_crm(cedula_activa, nota_secreta)
+            else:
+                print("⚠️ [ALERTA] La IA generó una promesa, pero no se detectó ninguna cédula en el historial del chat.", flush=True)
+            
             respuesta_limpia = re.sub(r'\[NOTA_CRM:.*?\]', '', respuesta_cruda).strip()
         else:
             respuesta_limpia = respuesta_cruda.strip()
