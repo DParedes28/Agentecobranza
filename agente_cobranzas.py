@@ -26,27 +26,58 @@ memoria_chats = {}
 # 🗄️ BASE DE DATOS NEON (CONEXIONES REALES)
 # ==========================================
 def buscar_deuda_en_neon(cedula):
-    """Busca las deudas activas cruzando las tablas de la firma"""
+    """Busca las deudas activas en Cartera Comercial y Propiedad Horizontal"""
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
+                # 1. Buscar en Cartera Comercial (Obligaciones)
+                # OJO: Agregamos "OR o.estado IS NULL" para que no se le escape nada
                 cur.execute("""
                     SELECT o.capital, o.tipo_titulo, c.nombre 
                     FROM obligaciones o 
                     JOIN contactos c ON o.identificacion_deudor = c.identificacion 
-                    WHERE o.identificacion_deudor = %s AND o.estado != 'Pagada'
+                    WHERE o.identificacion_deudor = %s AND (o.estado != 'Pagada' OR o.estado IS NULL)
                 """, (cedula,))
-                resultados = cur.fetchall()
+                res_comercial = cur.fetchall()
                 
-                if resultados:
-                    nombre = resultados[0][2]
-                    total = sum(r[0] for r in resultados)
-                    detalle = "\n".join([f"- {r[1]}: ${r[0]:,.0f}" for r in resultados])
-                    return f"Deudor: {nombre}. Deudas activas:\n{detalle}\nTotal Adeudado: ${total:,.0f}."
-        return ""
+                # 2. Buscar en Propiedad Horizontal (Expensas)
+                # OJO: Agregamos "OR e.estado IS NULL" para que lea todas las cuotas de tu tabla
+                cur.execute("""
+                    SELECT e.valor_capital, e.concepto, c.nombre 
+                    FROM expensas_ph e
+                    JOIN inmuebles_ph i ON e.inmueble_id = i.id
+                    JOIN contactos c ON i.contacto_id = c.id
+                    WHERE c.identificacion = %s AND (e.estado != 'Pagada' OR e.estado IS NULL)
+                """, (cedula,))
+                res_ph = cur.fetchall()
+                
+                # SI NO ENCUENTRA NADA EN NINGUNA DE LAS DOS
+                if not res_comercial and not res_ph:
+                    return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas en la firma. Infórmale al usuario que está a paz y salvo o pídele que verifique el número."
+                    
+                # SI ENCUENTRA DATOS: Armamos el reporte sumando todo
+                nombre = ""
+                detalles = []
+                total = 0
+                
+                if res_comercial:
+                    nombre = res_comercial[0][2]
+                    for r in res_comercial:
+                        detalles.append(f"- {r[1]} (Comercial): ${r[0]:,.0f}")
+                        total += r[0]
+                        
+                if res_ph:
+                    if not nombre: nombre = res_ph[0][2]
+                    for r in res_ph:
+                        detalles.append(f"- {r[1]} (Admin PH): ${r[0]:,.0f}")
+                        total += float(r[0]) # Aseguramos que sume correctamente como decimal
+                        
+                texto_detalle = "\n".join(detalles)
+                return f"DATOS REALES DEL SISTEMA:\nDeudor: {nombre}\nObligaciones vigentes:\n{texto_detalle}\nTOTAL ADEUDADO: ${total:,.0f}"
+                
     except Exception as e:
         print(f"❌ Error en base de datos: {e}", flush=True)
-        return ""
+        return "SISTEMA: Error técnico al conectar con la base de datos. Pide disculpas al usuario."
 
 def guardar_auditoria(numero, remitente, mensaje):
     """Guarda el historial inmutable de chats"""
