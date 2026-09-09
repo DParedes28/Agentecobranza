@@ -112,7 +112,7 @@ def procesar_y_responder(data):
 
         # 4. Hablamos con Claude 3.5 Haiku
         respuesta_ia = cliente_ia.messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5-20251001",
             max_tokens=400,
             system=(
                 "Eres el asistente virtual de cobranzas del abogado Diego Alejandro Paredes en Pereira, "
