@@ -67,16 +67,31 @@ def procesar_y_responder(data):
         # 1. Extraemos la información del JSON
         valor = data['entry'][0]['changes'][0]['value']
         
-        # Filtro 1: Si Meta solo nos avisa que el mensaje fue "leído" o "entregado", lo ignoramos
+        # 🛡️ NUEVO FILTRO 1: Ignorar estrictamente cualquier evento que no sea de WhatsApp
+        if valor.get('messaging_product') != 'whatsapp':
+            print("⚠️ Evento descartado: El payload no proviene de WhatsApp.", flush=True)
+            return
+        
+        # Filtro original: Si Meta solo nos avisa que el mensaje fue "leído" o "entregado", lo ignoramos
         if 'messages' not in valor:
             return
             
         mensaje_info = valor['messages'][0]
         contacto = valor.get('contacts', [{}])[0]
-        numero_cliente = mensaje_info.get('from') or contacto.get('wa_id') or mensaje_info.get('from_user_id')
+        
+        # Eliminamos el from_user_id ya que suele traer identificadores técnicos de otras plataformas
+        numero_cliente = mensaje_info.get('from') or contacto.get('wa_id') 
+        
+        # 🛡️ NUEVO FILTRO 2: Validar formato del número telefónico
+        # Los números estándar (E.164) contienen solo números y máximo 15 dígitos.
+        # Los IDs técnicos de Meta (como el del error) tienen 16 o más dígitos.
+        if not numero_cliente or not numero_cliente.isdigit() or len(numero_cliente) > 15:
+            print(f"⚠️ Evento descartado: El ID '{numero_cliente}' no es un número de teléfono válido.", flush=True)
+            return
+            
         tipo_mensaje = mensaje_info.get('type', 'desconocido')
         
-        # Filtro 2: Si envían audios, imágenes o stickers, avisamos que no los leemos
+        # Filtro original: Si envían audios, imágenes o stickers, avisamos que no los leemos
         if tipo_mensaje != 'text':
             print(f"⚠️ El {numero_cliente} envió formato no soportado: {tipo_mensaje}", flush=True)
             enviar_mensaje_whatsapp(numero_cliente, "Hola. Soy el asistente virtual del despacho. Por favor, escríbeme tu mensaje exclusivamente en texto. 🤖")
@@ -111,7 +126,7 @@ def procesar_y_responder(data):
             "Genera la respuesta para el deudor basándote en este historial y tus reglas."
         )
 
-        # 4. Hablamos con Claude 3.5 Haiku
+        # 4. Hablamos con Claude
         respuesta_ia = cliente_ia.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -146,6 +161,9 @@ def enviar_mensaje_whatsapp(numero_destino, texto):
     url = f"https://graph.facebook.com/v20.0/{ID_NUMERO_TELEFONO}/messages"
     headers = {"Authorization": f"Bearer {TOKEN_META}", "Content-Type": "application/json"}
     
+    # 🚨 NUEVO LOG: Validamos el destino final antes de impactar la API de Meta
+    print(f"📤 INTENTANDO ENVIAR MENSAJE A: {numero_destino}", flush=True)
+    
     respuesta = requests.post(url, headers=headers, json={
         "messaging_product": "whatsapp", 
         "to": numero_destino, 
@@ -153,7 +171,6 @@ def enviar_mensaje_whatsapp(numero_destino, texto):
         "text": {"body": texto}
     })
     
-    # 🚨 RADAR DE SALIDA: Imprime la excusa que nos dé Meta si bloquea el envío
     print(f"📡 RESPUESTA DE META AL ENVIAR: {respuesta.status_code} - {respuesta.text}", flush=True)
 
 if __name__ == '__main__':
