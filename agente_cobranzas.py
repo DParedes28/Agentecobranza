@@ -72,7 +72,7 @@ def procesar_y_responder(data):
             return
             
         mensaje_info = valor['messages'][0]
-        numero_cliente = mensaje_info['from']
+        numero_cliente = mensaje_info.get('from') or mensaje_info.get('from_user_id')
         tipo_mensaje = mensaje_info.get('type', 'desconocido')
         
         # Filtro 2: Si envían audios, imágenes o stickers, avisamos que no los leemos
