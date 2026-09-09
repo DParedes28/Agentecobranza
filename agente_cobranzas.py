@@ -79,14 +79,12 @@ def procesar_y_responder(data):
         mensaje_info = valor['messages'][0]
         contacto = valor.get('contacts', [{}])[0]
         
-        # Eliminamos el from_user_id ya que suele traer identificadores técnicos de otras plataformas
-        numero_cliente = mensaje_info.get('from') or contacto.get('wa_id') 
+       # 1. Extraer el ID: Buscamos primero el número normal, y si está oculto, capturamos el ID técnico
+        numero_cliente = mensaje_info.get('from') or contacto.get('wa_id') or mensaje_info.get('from_user_id') or contacto.get('user_id')
         
-        # 🛡️ NUEVO FILTRO 2: Validar formato del número telefónico
-        # Los números estándar (E.164) contienen solo números y máximo 15 dígitos.
-        # Los IDs técnicos de Meta (como el del error) tienen 16 o más dígitos.
-        if not numero_cliente or not numero_cliente.isdigit() or len(numero_cliente) > 15:
-            print(f"⚠️ Evento descartado: El ID '{numero_cliente}' no es un número de teléfono válido.", flush=True)
+        # 2. Validación flexible: Solo verificamos que exista un ID (sea número estándar o código alfanumérico técnico)
+        if not numero_cliente:
+            print("⚠️ Evento descartado: No se pudo extraer ningún identificador del cliente.", flush=True)
             return
             
         tipo_mensaje = mensaje_info.get('type', 'desconocido')
