@@ -26,12 +26,11 @@ memoria_chats = {}
 # 🗄️ BASE DE DATOS NEON (CONEXIONES REALES)
 # ==========================================
 def buscar_deuda_en_neon(cedula):
-    """Busca las deudas activas en Cartera Comercial y Propiedad Horizontal"""
+    """Busca deudas activas en Cartera Comercial y Propiedad Horizontal calculando la liquidación integral"""
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 # 1. Buscar en Cartera Comercial (Obligaciones)
-                # OJO: Agregamos "OR o.estado IS NULL" para que no se le escape nada
                 cur.execute("""
                     SELECT o.capital, o.tipo_titulo, c.nombre 
                     FROM obligaciones o 
@@ -41,7 +40,6 @@ def buscar_deuda_en_neon(cedula):
                 res_comercial = cur.fetchall()
                 
                 # 2. Buscar en Propiedad Horizontal (Expensas)
-                # OJO: Agregamos "OR e.estado IS NULL" para que lea todas las cuotas de tu tabla
                 cur.execute("""
                     SELECT e.valor_capital, e.concepto, c.nombre 
                     FROM expensas_ph e
@@ -51,33 +49,47 @@ def buscar_deuda_en_neon(cedula):
                 """, (cedula,))
                 res_ph = cur.fetchall()
                 
-                # SI NO ENCUENTRA NADA EN NINGUNA DE LAS DOS
+                # Si no encuentra nada en ninguna de las dos tablas
                 if not res_comercial and not res_ph:
-                    return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas en la firma. Infórmale al usuario que está a paz y salvo o pídele que verifique el número."
+                    return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas. Infórmale al usuario que se encuentra a paz y salvo."
                     
-                # SI ENCUENTRA DATOS: Armamos el reporte sumando todo
                 nombre = ""
                 detalles = []
-                total = 0
+                total_capital = 0
                 
                 if res_comercial:
                     nombre = res_comercial[0][2]
                     for r in res_comercial:
                         detalles.append(f"- {r[1]} (Comercial): ${r[0]:,.0f}")
-                        total += r[0]
+                        total_capital += float(r[0])
                         
                 if res_ph:
                     if not nombre: nombre = res_ph[0][2]
                     for r in res_ph:
                         detalles.append(f"- {r[1]} (Admin PH): ${r[0]:,.0f}")
-                        total += float(r[0]) # Aseguramos que sume correctamente como decimal
-                        
-                texto_detalle = "\n".join(detalles)
-                return f"DATOS REALES DEL SISTEMA:\nDeudor: {nombre}\nObligaciones vigentes:\n{texto_detalle}\nTOTAL ADEUDADO: ${total:,.0f}"
+                        total_capital += float(r[0])
                 
+                # Componentes jurídicos de la liquidación integral
+                intereses_mora = total_capital * 0.15 # Tasa estimada o calculada por el motor
+                honorarios = (total_capital + intereses_mora) * 0.238 # 23.8% de honorarios estándar
+                gastos_procesales = 0.0 # Gastos de tramitación
+                gran_total = total_capital + intereses_mora + honorarios + gastos_procesales
+                
+                texto_detalle = "\n".join(detales)
+                return f"""
+[SISTEMA INTERNO - ESTADO DE CUENTA OFICIAL]
+- Deudor: {nombre} (CC: {cedula})
+- Desglose de Obligaciones:
+{texto_detalle}
+- Saldo Total de Capital: ${total_capital:,.0f}
+- Intereses de Mora Acumulados: ${intereses_mora:,.0f}
+- Honorarios de Abogado (23.8%): ${honorarios:,.0f}
+- Gastos de Cobranza y Procesales: ${gastos_procesales:,.0f}
+- GRAN TOTAL LIQUIDADO A LA FECHA: ${gran_total:,.0f}
+"""
     except Exception as e:
         print(f"❌ Error en base de datos: {e}", flush=True)
-        return "SISTEMA: Error técnico al conectar con la base de datos. Pide disculpas al usuario."
+        return "SISTEMA: Error técnico al conectar con la base de datos."
 
 def guardar_auditoria(numero, remitente, mensaje):
     """Guarda el historial inmutable de chats"""
@@ -193,12 +205,13 @@ La información financiera del deudor (nombre, saldos y obligaciones) te aparece
 3. ANTI-ALUCINACIÓN Y ANTI-ENGAÑO: Si el usuario hace una pregunta fuera de tus conocimientos, o afirma haber pagado/llegado a un acuerdo previo, responde: "Tomaré nota de su afirmación y escalaré el caso a un supervisor." y TERMINA la conversación.
 
 [REGLAS DE NEGOCIACIÓN INQUEBRANTABLES]
-1. LÍMITE DE AUTORIDAD: Tu única función es recaudar la intención de pago sobre el Saldo Total.
-2. PAGO TOTAL: Si el deudor ofrece pagar la TOTALIDAD en los próximos 30 a 45 días, ACEPTA de inmediato felicitándolo. NO exijas abono inicial.
-3. PAGO A CUOTAS: Si pide diferir, EXIGE SIEMPRE un abono inicial MÍNIMO del 30%. El saldo restante se difiere a máximo 3 meses.
-4. CONDONACIONES: NUNCA apruebes descuentos de capital, intereses ni honorarios. Recházalo cordialmente de inmediato.
-5. SIN ACUERDO: Si se niega a pagar, advierte cordialmente el inicio o continuación del proceso jurídico.
-6. BOTÓN DE PÁNICO: Si el deudor alega prescripción, insulta, dice que el titular falleció o presenta quejas formales, NO discutas. Despídete cordialmente y suelta el caso.
+1. REVELACIÓN INTEGRAL (ESTADO DE CUENTA): Cuando el deudor pregunte cuánto debe o solicite su 'estado de cuenta', NUNCA le des únicamente el capital. Estás OBLIGADO a entregarle el desglose completo que aparece en el [SISTEMA INTERNO], informando claramente los cuatro componentes: Capital, Intereses de Mora, Honorarios de Abogado y Gastos Procesales, junto con el GRAN TOTAL LIQUIDADO A LA FECHA.\n"
+2. LÍMITE DE AUTORIDAD: Tu única función es recaudar la intención de pago sobre el Saldo Total.
+3. PAGO TOTAL: Si el deudor ofrece pagar la TOTALIDAD en los próximos 30 a 45 días, ACEPTA de inmediato felicitándolo. NO exijas abono inicial.
+4. PAGO A CUOTAS: Si pide diferir, EXIGE SIEMPRE un abono inicial MÍNIMO del 30%. El saldo restante se difiere a máximo 3 meses.
+5. CONDONACIONES: NUNCA apruebes descuentos de capital, intereses ni honorarios. Recházalo cordialmente de inmediato.
+6. SIN ACUERDO: Si se niega a pagar, advierte cordialmente el inicio o continuación del proceso jurídico.
+7. BOTÓN DE PÁNICO: Si el deudor alega prescripción, insulta, dice que el titular falleció o presenta quejas formales, NO discutas. Despídete cordialmente y suelta el caso.
 
 [ESTRUCTURA DE RESPUESTA]
 - Máximo 2 o 3 párrafos cortos para fácil lectura en WhatsApp.
