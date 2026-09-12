@@ -75,7 +75,8 @@ def buscar_deuda_en_neon(cedula):
                 gastos_procesales = 0.0 # Gastos de tramitación
                 gran_total = total_capital + intereses_mora + honorarios + gastos_procesales
                 
-                texto_detalle = "\n".join(detales)
+                # ¡Corregido aquí! "detales" por "detalles"
+                texto_detalle = "\n".join(detalles)
                 return f"""
 [SISTEMA INTERNO - ESTADO DE CUENTA OFICIAL]
 - Deudor: {nombre} (CC: {cedula})
@@ -186,7 +187,7 @@ def procesar_y_responder(data):
             "Genera la respuesta para el deudor basándote en este historial y tus reglas."
         )
 
-        # 3. CONECTAR CON CLAUDE
+        # 3. CONECTAR CON CLAUDE (¡Corregido el error de duplicación aquí!)
         respuesta_ia = cliente_ia.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -205,7 +206,7 @@ La información financiera del deudor (nombre, saldos y obligaciones) te aparece
 3. ANTI-ALUCINACIÓN Y ANTI-ENGAÑO: Si el usuario hace una pregunta fuera de tus conocimientos, o afirma haber pagado/llegado a un acuerdo previo, responde: "Tomaré nota de su afirmación y escalaré el caso a un supervisor." y TERMINA la conversación.
 
 [REGLAS DE NEGOCIACIÓN INQUEBRANTABLES]
-1. REVELACIÓN INTEGRAL (ESTADO DE CUENTA): Cuando el deudor pregunte cuánto debe o solicite su 'estado de cuenta', NUNCA le des únicamente el capital. Estás OBLIGADO a entregarle el desglose completo que aparece en el [SISTEMA INTERNO], informando claramente los cuatro componentes: Capital, Intereses de Mora, Honorarios de Abogado y Gastos Procesales, junto con el GRAN TOTAL LIQUIDADO A LA FECHA.\n"
+1. REVELACIÓN INTEGRAL (ESTADO DE CUENTA): Cuando el deudor pregunte cuánto debe o solicite su 'estado de cuenta', NUNCA le des únicamente el capital. Estás OBLIGADO a entregarle el desglose completo que aparece en el [SISTEMA INTERNO], informando claramente los cuatro componentes: Capital, Intereses de Mora, Honorarios de Abogado y Gastos Procesales, junto con el GRAN TOTAL LIQUIDADO A LA FECHA.
 2. LÍMITE DE AUTORIDAD: Tu única función es recaudar la intención de pago sobre el Saldo Total.
 3. PAGO TOTAL: Si el deudor ofrece pagar la TOTALIDAD en los próximos 30 a 45 días, ACEPTA de inmediato felicitándolo. NO exijas abono inicial.
 4. PAGO A CUOTAS: Si pide diferir, EXIGE SIEMPRE un abono inicial MÍNIMO del 30%. El saldo restante se difiere a máximo 3 meses.
@@ -224,10 +225,6 @@ SIEMPRE incluye al final de tu última respuesta una de estas etiquetas exactas:
 - Alegato complejo/Queja/Insulto/Fallecimiento: [NOTA_CRM: 🚨 ALERTA - Requiere revisión de abogado]
 - Actualiza contacto: [NUEVO_CORREO: correo@email.com]"""
             ),
-            messages=[
-                {"role": "user", "content": instruccion_secreta}
-            ]
-        )
             messages=[
                 {"role": "user", "content": instruccion_secreta}
             ]
