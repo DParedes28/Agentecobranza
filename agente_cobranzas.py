@@ -35,9 +35,9 @@ def fecha_colombia():
 
 
 def verificar_firma_meta(raw_body):
-    """Valida X-Hub-Signature-256 cuando META_APP_SECRET esta configurado."""
+    """Valida X-Hub-Signature-256 y falla cerrado si falta el App Secret."""
     if not META_APP_SECRET:
-        return True
+        return False
     firma = request.headers.get("X-Hub-Signature-256", "")
     if not firma.startswith("sha256="):
         return False
@@ -225,6 +225,7 @@ def health():
         "TOKEN_META": TOKEN_META,
         "ID_NUMERO_TELEFONO": ID_NUMERO_TELEFONO,
         "TOKEN_VERIFICACION": TOKEN_VERIFICACION,
+        "META_APP_SECRET": META_APP_SECRET,
         "LIQUIDADOR_API_URL": LIQUIDADOR_API_URL,
         "LIQUIDADOR_API_KEY": LIQUIDADOR_API_KEY,
     }
@@ -306,7 +307,6 @@ def procesar_y_responder(data):
             respuesta_cruda = re.sub(r"\[RESUMEN_FINAL:.*?\]", "", respuesta_cruda, flags=re.DOTALL).strip()
             memoria_chats[numero_cliente] = []
         respuesta_limpia = respuesta_cruda.strip()
-        memoria_chats.setdefault(numero_cliente, []).append(f"Tu respondiste: {respuesta_limpia}")
         guardar_auditoria(numero_cliente, "Bot IA", respuesta_limpia)
         enviar_mensaje_whatsapp(numero_cliente, respuesta_limpia, id_mensaje_entrante)
         if quiere_pdf:
