@@ -235,3 +235,15 @@ def registrar_evento(message_id, numero_telefono):
                 (str(message_id), str(numero_telefono) if numero_telefono else None),
             )
             return cur.fetchone() is not None
+
+
+def eliminar_evento(message_id):
+    """Libera un evento para que Meta pueda reintentarlo tras un fallo real."""
+    if not message_id:
+        return
+    with _connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM bot_eventos_procesados WHERE message_id = %s",
+                (str(message_id),),
+            )
