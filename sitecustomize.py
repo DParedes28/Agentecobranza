@@ -5,6 +5,8 @@
 2. Replaces the agent's in-memory conversation/obligation dictionaries with
    PostgreSQL-backed state after agente_cobranzas is imported.
 3. Deduplicates Meta/WhatsApp message IDs before the message is processed.
+4. Persists every incoming/outgoing conversation message and honors human
+   takeover mode without replacing the existing WhatsApp/Anthropic flow.
 """
 
 import builtins
@@ -77,9 +79,11 @@ def _persist_agent_state(module):
 
     try:
         from persistent_state import PersistentState, registrar_evento
+        import control_humano
 
         module.memoria_chats = PersistentState("memoria_chat")
         module.obligaciones_activas = PersistentState("obligacion_activa")
+        control_humano.install(module)
 
         original_processor = module.procesar_y_responder
 
@@ -94,10 +98,14 @@ def _persist_agent_state(module):
                 if not registrar_evento(message_id, numero):
                     print(f"ℹ️ Mensaje duplicado ignorado: {message_id}", flush=True)
                     return
+                if not control_humano.persist_incoming(module, data):
+                    print(f"👤 Conversacion {numero} bajo control humano; IA no responde", flush=True)
+                    return
             except Exception as exc:
-                # Fail closed: si no podemos registrar idempotencia no ejecutamos
-                # el proceso, evitando respuestas duplicadas en produccion.
-                print(f"❌ No se pudo validar idempotencia: {repr(exc)}", flush=True)
+                # Fail closed para idempotencia, como antes. La persistencia de
+                # conversacion es aditiva y no debe romper el webhook si Neon
+                # esta momentaneamente no disponible.
+                print(f"❌ No se pudo validar idempotencia/control humano: {repr(exc)}", flush=True)
                 return
             return original_processor(data)
 
@@ -105,8 +113,6 @@ def _persist_agent_state(module):
         module._PERSISTENT_STATE_INSTALLED = True
         print("✅ Estado persistente PostgreSQL habilitado", flush=True)
     except Exception as exc:
-        # El agente no debe arrancar con estado RAM-only si la capa persistente
-        # no pudo inicializarse. El error queda visible en los logs de Render.
         print(f"❌ No se pudo habilitar estado persistente: {repr(exc)}", flush=True)
         raise
 
