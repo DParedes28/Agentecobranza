@@ -27,81 +27,88 @@ memoria_chats = {}
 # ==========================================
 # 🗄️ BASE DE DATOS NEON (CONEXIONES REALES)
 # ==========================================
+import os
+import psycopg2
+from datetime import date
+
 def buscar_deuda_en_neon(cedula):
-    """Busca deudas activas en Cartera Comercial y Propiedad Horizontal (Incluyendo Codeudores)"""
+    """Busca al deudor o codeudor y liquida la deuda exacta usando el Motor Judicial Central"""
     try:
-        with psycopg2.connect(DATABASE_URL) as conn:
+        # IMPORTACIÓN BLINDADA: Evita el error de "Importación Circular" entre archivos
+        try:
+            from main import motor_calculo_judicial
+        except ImportError as e:
+            return "SISTEMA: Error interno. No se pudo conectar el bot con el Liquidador Judicial."
+
+        with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
             with conn.cursor() as cur:
-                # 1. Buscar en Cartera Comercial (Obligaciones)
-                cur.execute("""
-                    SELECT o.capital, o.tipo_titulo, c.nombre 
-                    FROM obligaciones o 
-                    JOIN contactos c ON o.identificacion_deudor = c.identificacion 
-                    WHERE o.identificacion_deudor = %s AND (o.estado != 'Pagada' OR o.estado IS NULL)
-                """, (cedula,))
-                res_comercial = cur.fetchall()
                 
-                # 2. Buscar en Propiedad Horizontal (Expensas) - MEGA CONSULTA CON UNION
-                # Busca tanto al deudor principal como a los codeudores (litisconsorcio)
+                # 1. MEGA-CONSULTA: Buscar el ID del Inmueble y datos de la persona (Principal o Codeudor)
                 cur.execute("""
-                    SELECT e.valor_capital, e.concepto, c.nombre 
-                    FROM expensas_ph e
-                    JOIN inmuebles_ph i ON e.inmueble_id = i.id
-                    JOIN contactos c ON i.contacto_id = c.id
-                    WHERE c.identificacion = %s AND (e.estado != 'Pagada' OR e.estado IS NULL)
+                    SELECT i.id AS inmueble_id, c.nombre, c.identificacion 
+                    FROM inmuebles_ph i 
+                    JOIN contactos c ON i.contacto_id = c.id 
+                    WHERE c.identificacion = %s
                     
                     UNION
                     
-                    SELECT e.valor_capital, e.concepto, c.nombre 
-                    FROM expensas_ph e
-                    JOIN procesos p ON e.inmueble_id = p.inmueble_id
+                    SELECT p.inmueble_id AS id, c.nombre, c.identificacion 
+                    FROM procesos p
                     JOIN procesos_litisconsorcio pl ON p.radicado_interno = pl.radicado_interno
                     JOIN contactos c ON pl.identificacion_demandado = c.identificacion
-                    WHERE c.identificacion = %s AND (e.estado != 'Pagada' OR e.estado IS NULL)
-                """, (cedula, cedula)) # Pasamos la cédula dos veces por las dos consultas del UNION
-                res_ph = cur.fetchall()
+                    WHERE c.identificacion = %s
+                """, (cedula, cedula)) # Doble parámetro por el UNION
                 
-                # Si no encuentra nada en ninguna de las dos tablas
-                if not res_comercial and not res_ph:
-                    return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas. Infórmale al usuario que se encuentra a paz y salvo."
-                    
-                nombre = ""
-                detalles = []
-                total_capital = 0
+                registro = cur.fetchone()
                 
-                if res_comercial:
-                    nombre = res_comercial[0][2]
-                    for r in res_comercial:
-                        detalles.append(f"- {r[1]} (Comercial): ${r[0]:,.0f}")
-                        total_capital += float(r[0])
-                        
-                if res_ph:
-                    if not nombre: nombre = res_ph[0][2]
-                    for r in res_ph:
-                        detalles.append(f"- {r[1]} (Admin PH): ${r[0]:,.0f}")
-                        total_capital += float(r[0])
+                # ESCUDO: Si no es dueño ni codeudor, abortar amablemente
+                if not registro:
+                    return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas ni como titular ni como codeudor. Infórmale al usuario que está a paz y salvo."
                 
-                # Componentes jurídicos de la liquidación integral
-                intereses_mora = total_capital * 0.15 # Tasa estimada o calculada
-                honorarios = (total_capital + intereses_mora) * 0.238 # 23.8% de honorarios estándar
-                gastos_procesales = 0.0 # Gastos de tramitación
-                gran_total = total_capital + intereses_mora + honorarios + gastos_procesales
-                
-                texto_detalle = "\n".join(detalles)
-                return f"""
+                inmueble_id, nombre, identificacion = registro
+
+        # 2. INVOCAR AL MOTOR MATEMÁTICO CENTRAL
+        # Usamos los parámetros por defecto de tu firma (Puedes ajustarlos si es necesario)
+        fecha_hoy = date.today()
+        tipo_tasa_defecto = "Máxima Legal"
+        tasa_fija_defecto = 0.0
+        honorarios_pct = 23.8 # Porcentaje estándar de honorarios
+        gastos = 0.0 
+        
+        # El motor procesa la causación y calcula día a día
+        resultados, resumen, info_extra = motor_calculo_judicial(
+            inmueble_id, tipo_tasa_defecto, tasa_fija_defecto, honorarios_pct, gastos, fecha_hoy
+        )
+        
+        # 3. EXTRACCIÓN SEGURA (Evitando KeyError si el motor arroja vacíos)
+        # NOTA PARA DIEGO: Asegúrate de que las llaves ('total_capital', etc.) sean 
+        # exactamente los nombres que usas dentro del diccionario 'resumen' en tu main.py.
+        # Si en tu main.py lo llamaste diferente (ej: 'capital_acumulado'), cámbialo aquí.
+        capital = resumen.get('total_capital', 0.0) if resumen else 0.0
+        intereses = resumen.get('total_intereses', 0.0) if resumen else 0.0
+        honorarios_calc = resumen.get('total_honorarios', 0.0) if resumen else 0.0
+        gastos_calc = resumen.get('total_gastos', 0.0) if resumen else 0.0
+        gran_total = resumen.get('gran_total', 0.0) if resumen else 0.0
+
+        # ESCUDO FINAL: Si el Gran Total es cero o menor, asumimos paz y salvo real
+        if gran_total <= 0:
+             return f"SISTEMA: La cédula {cedula} está vinculada, pero su saldo líquido a la fecha es $0. Infórmale el paz y salvo."
+
+        # 4. CONSTRUCCIÓN DEL ESTADO DE CUENTA INTEGRAL PARA CLAUDE
+        return f"""
 [SISTEMA INTERNO - ESTADO DE CUENTA OFICIAL]
-- Deudor: {nombre} (CC: {cedula})
-- Desglose de Obligaciones:
-{texto_detalle}
-- Saldo Total de Capital: ${total_capital:,.0f}
-- Intereses de Mora Acumulados: ${intereses_mora:,.0f}
-- Honorarios de Abogado (23.8%): ${honorarios:,.0f}
-- Gastos de Cobranza y Procesales: ${gastos_procesales:,.0f}
+- Deudor/Codeudor: {nombre} (CC: {identificacion})
+- Saldo de Capital: ${capital:,.0f}
+- Intereses de Mora Acumulados: ${intereses:,.0f}
+- Honorarios de Abogado ({honorarios_pct}%): ${honorarios_calc:,.0f}
+- Gastos Procesales: ${gastos_calc:,.0f}
 - GRAN TOTAL LIQUIDADO A LA FECHA: ${gran_total:,.0f}
+
+REGLA ESTRICTA DE NEGOCIACIÓN: El cliente DEBE pagar o negociar sobre el GRAN TOTAL (${gran_total:,.0f}). No negocies usando únicamente el capital.
 """
     except Exception as e:
-        print(f"❌ Error en base de datos: {e}", flush=True)
-        return "SISTEMA: Error técnico al conectar con la base de datos."
+        print(f"❌ Error crítico en liquidación bot: {e}", flush=True)
+        return "SISTEMA: Alerta técnica al calcular la deuda. El motor financiero está en pausa. Pide al deudor que espere y contacta a un humano."
 
 def guardar_auditoria(numero, remitente, mensaje):
     """Guarda el historial inmutable de chats"""
