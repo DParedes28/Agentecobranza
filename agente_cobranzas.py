@@ -307,6 +307,7 @@ def procesar_y_responder(data):
             respuesta_cruda = re.sub(r"\[RESUMEN_FINAL:.*?\]", "", respuesta_cruda, flags=re.DOTALL).strip()
             memoria_chats[numero_cliente] = []
         respuesta_limpia = respuesta_cruda.strip()
+        memoria_chats.setdefault(numero_cliente, []).append(f"Tu respondiste: {respuesta_limpia}")
         guardar_auditoria(numero_cliente, "Bot IA", respuesta_limpia)
         enviar_mensaje_whatsapp(numero_cliente, respuesta_limpia, id_mensaje_entrante)
         if quiere_pdf:
