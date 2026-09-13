@@ -116,7 +116,7 @@ def agent_can_respond(telefono):
         return _mode(telefono) != "HUMANO"
     except Exception as exc:
         print(f"[CONTROL HUMANO] No se pudo leer modo; se bloquea la IA por seguridad: {exc!r}", flush=True)
-        return False
+        return None
 
 
 def _set_mode(telefono, usuario, modo, accion):
@@ -304,10 +304,11 @@ def persist_incoming(module, data):
         match = re.search(r"\d{6,12}", texto or "")
         identificacion = match.group(0) if match else None
         record_message(telefono, "ENTRANTE", "DEUDOR", texto, mensaje_meta_id=mid, tipo_mensaje=tipo, identificacion=identificacion)
-        return agent_can_respond(telefono)
+        result = agent_can_respond(telefono)
+        return result
     except Exception as exc:
-        print(f"[CONTROL HUMANO] No se pudo interceptar mensaje entrante; se bloquea la IA por seguridad: {exc!r}", flush=True)
-        return False
+        print(f"[CONTROL HUMANO] No se pudo interceptar mensaje entrante; se bloquea la IA por seguridad y se permite reintento: {exc!r}", flush=True)
+        return None
 
 
 def install(module):
