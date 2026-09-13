@@ -154,55 +154,82 @@ def buscar_deuda_en_neon(cedula):
 
                 titulares = cur.fetchall()
 
-                # ==========================================================
-# 5. BUSCAR CODEUDOR
-# ==========================================================
+                # ==================================================
+                # 5. BUSCAR CODEUDOR
+                # ==================================================
+                #
+                # NO dependemos de contactos para encontrarlo.
+                #
+                # La relación principal es:
+                #
+                # procesos_litisconsorcio
+                #             ↓
+                #        procesos
+                #             ↓
+                #        inmueble_id
+                #
+                # contactos es solamente para recuperar el nombre.
+                # ==================================================
 
-cur.execute("""
-    SELECT DISTINCT
-        p.inmueble_id,
-        COALESCE(
-            c.nombre,
-            'Persona no registrada'
-        ) AS nombre,
-        pl.identificacion_demandado,
-        p.radicado_interno,
-        pl.es_principal,
-        p.estado
-    FROM procesos_litisconsorcio pl
+                cur.execute("""
+                    SELECT DISTINCT
+                        p.inmueble_id,
+                        COALESCE(
+                            c.nombre,
+                            'Persona no registrada'
+                        ) AS nombre,
+                        pl.identificacion_demandado,
+                        p.radicado_interno,
+                        pl.es_principal,
+                        p.estado
+                    FROM procesos_litisconsorcio pl
 
-    INNER JOIN procesos p
-        ON p.radicado_interno = pl.radicado_interno
+                    INNER JOIN procesos p
+                        ON p.radicado_interno =
+                           pl.radicado_interno
 
-    LEFT JOIN contactos c
-        ON REGEXP_REPLACE(
-            COALESCE(c.identificacion::text, ''),
-            '[^0-9]',
-            '',
-            'g'
-        ) =
-        REGEXP_REPLACE(
-            COALESCE(
-                pl.identificacion_demandado::text,
-                ''
-            ),
-            '[^0-9]',
-            '',
-            'g'
-        )
+                    LEFT JOIN contactos c
+                        ON REGEXP_REPLACE(
+                            COALESCE(
+                                c.identificacion::text,
+                                ''
+                            ),
+                            '[^0-9]',
+                            '',
+                            'g'
+                        ) =
+                        REGEXP_REPLACE(
+                            COALESCE(
+                                pl.identificacion_demandado::text,
+                                ''
+                            ),
+                            '[^0-9]',
+                            '',
+                            'g'
+                        )
 
-    WHERE REGEXP_REPLACE(
-        COALESCE(
-            pl.identificacion_demandado::text,
-            ''
-        ),
-        '[^0-9]',
-        '',
-        'g'
-    ) = %s
-""", (cedula_limpia,))
+                    WHERE REGEXP_REPLACE(
+                        COALESCE(
+                            pl.identificacion_demandado::text,
+                            ''
+                        ),
+                        '[^0-9]',
+                        '',
+                        'g'
+                    ) = %s
 
-codeudores = cur.fetchall()
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(
+                                COALESCE(p.estado, '')
+                            ) = 'activo'
+                            THEN 0
+                            ELSE 1
+                        END,
+                        p.inmueble_id
+                """, (cedula_limpia,))
+
+                codeudores = cur.fetchall()
 
                 # ==================================================
                 # 6. MOSTRAR RESULTADOS
