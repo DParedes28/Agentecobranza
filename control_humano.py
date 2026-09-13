@@ -206,6 +206,27 @@ def _register_routes(module):
         except Exception as exc:
             return jsonify({"status": "error", "mensaje": str(exc)}), 500
 
+    @module.app.get("/control/conversaciones/<path:telefono>/control")
+    def control_historial(telefono):
+        ok, reason = _auth()
+        if not ok:
+            return jsonify({"status": "error", "mensaje": reason}), 401
+        try:
+            ensure_schema()
+            with _connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT ca.usuario, ca.accion, ca.fecha, ca.metadata
+                        FROM control_agente ca
+                        JOIN conversaciones_agente c ON c.id=ca.conversacion_id
+                        WHERE c.telefono=%s ORDER BY ca.fecha DESC LIMIT 100
+                    """, (_normalizar_telefono(telefono),))
+                    filas = cur.fetchall()
+            nombres = ["usuario", "accion", "fecha", "metadata"]
+            return jsonify({"status": "success", "control": [dict(zip(nombres, r)) for r in filas]})
+        except Exception as exc:
+            return jsonify({"status": "error", "mensaje": str(exc)}), 500
+
     @module.app.post("/control/tomar")
     def control_tomar():
         ok, reason = _auth()
@@ -295,6 +316,7 @@ def install(module):
     ensure_schema()
     module._HUMAN_ORIGINAL_SEND = module.enviar_mensaje_whatsapp
     module._HUMAN_ORIGINAL_PDF = getattr(module, "enviar_pdf_whatsapp", None)
+    module._HUMAN_ORIGINAL_LOOKUP = getattr(module, "buscar_deuda_en_neon", None)
 
     def enviar_mensaje_wrapped(telefono, texto, message_id=None):
         result = module._HUMAN_ORIGINAL_SEND(telefono, texto, message_id)
@@ -306,6 +328,23 @@ def install(module):
         return result
 
     module.enviar_mensaje_whatsapp = enviar_mensaje_wrapped
+
+    if module._HUMAN_ORIGINAL_PDF:
+        def enviar_pdf_wrapped(telefono, url_pdf, message_id=None):
+            result = module._HUMAN_ORIGINAL_PDF(telefono, url_pdf, message_id)
+            autor = getattr(_THREAD_STATE, "autor", None) or "AGENTE"
+            record_message(telefono, "SALIENTE", autor, "[Documento PDF enviado]", tipo_mensaje="document", metadata={"url_pdf": url_pdf})
+            return result
+        module.enviar_pdf_whatsapp = enviar_pdf_wrapped
+
+    if module._HUMAN_ORIGINAL_LOOKUP:
+        def lookup_wrapped(cedula, numero_cliente=None):
+            result = module._HUMAN_ORIGINAL_LOOKUP(cedula, numero_cliente)
+            if numero_cliente:
+                record_message(numero_cliente, "INTERNO", "SISTEMA", str(result or ""), tipo_mensaje="estado_deuda", identificacion=cedula, metadata={"tipo": "estado_deuda"})
+            return result
+        module.buscar_deuda_en_neon = lookup_wrapped
+
     _register_routes(module)
     module._HUMAN_CONTROL_INSTALLED = True
-    print("[CONTROL HUMANO] Conversaciones persistentes y control humano habilitados", flush=True)
+    print("[CONTROL HUMANO] Conversaciones persistentes, liquidaciones y control humano habilitados", flush=True)
