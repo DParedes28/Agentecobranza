@@ -29,6 +29,12 @@ obligaciones_activas = {}
 REQUEST_TIMEOUT = 30
 TZ_COLOMBIA = ZoneInfo("America/Bogota")
 
+# ==============================================================================
+# --- RUTA PING (DESPERTADOR PARA UPTIMEROBOT) ---
+# ==============================================================================
+@app.route('/', methods=['GET', 'HEAD'])
+def ping():
+    return "Agente de cobranzas activo", 200
 
 def fecha_colombia():
     return datetime.now(TZ_COLOMBIA).date().isoformat()
