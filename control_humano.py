@@ -1,9 +1,4 @@
-"""Control humano y trazabilidad persistente del agente de cobranza.
-
-Esta capa es aditiva: no reemplaza Meta/WhatsApp, Anthropic, Neon ni el
-liquidador existente. Mantiene una conversacion persistente, permite pasar una
-conversacion a un asesor humano y registra las tomas/devoluciones de control.
-"""
+"""Control humano y trazabilidad persistente del agente de cobranza."""
 
 import json
 import os
@@ -30,11 +25,8 @@ CREATE TABLE IF NOT EXISTS conversaciones_agente (
     tomada_en TIMESTAMPTZ,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS idx_conversaciones_agente_modo
-    ON conversaciones_agente (modo_actual);
-CREATE INDEX IF NOT EXISTS idx_conversaciones_agente_actividad
-    ON conversaciones_agente (fecha_ultima_actividad DESC);
-
+CREATE INDEX IF NOT EXISTS idx_conversaciones_agente_modo ON conversaciones_agente (modo_actual);
+CREATE INDEX IF NOT EXISTS idx_conversaciones_agente_actividad ON conversaciones_agente (fecha_ultima_actividad DESC);
 CREATE TABLE IF NOT EXISTS mensajes_agente (
     id BIGSERIAL PRIMARY KEY,
     conversacion_id BIGINT NOT NULL REFERENCES conversaciones_agente(id) ON DELETE CASCADE,
@@ -46,11 +38,7 @@ CREATE TABLE IF NOT EXISTS mensajes_agente (
     fecha TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS idx_mensajes_agente_conversacion
-    ON mensajes_agente (conversacion_id, fecha DESC);
-CREATE INDEX IF NOT EXISTS idx_mensajes_agente_autor
-    ON mensajes_agente (autor);
-
+CREATE INDEX IF NOT EXISTS idx_mensajes_agente_conversacion ON mensajes_agente (conversacion_id, fecha DESC);
 CREATE TABLE IF NOT EXISTS control_agente (
     id BIGSERIAL PRIMARY KEY,
     conversacion_id BIGINT NOT NULL REFERENCES conversaciones_agente(id) ON DELETE CASCADE,
@@ -59,8 +47,7 @@ CREATE TABLE IF NOT EXISTS control_agente (
     fecha TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS idx_control_agente_conversacion
-    ON control_agente (conversacion_id, fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_control_agente_conversacion ON control_agente (conversacion_id, fecha DESC);
 """
 
 
@@ -87,17 +74,14 @@ def _json(value):
 
 def _conversation_id(cur, telefono, identificacion=None):
     telefono = _normalizar_telefono(telefono)
-    cur.execute(
-        """
+    cur.execute("""
         INSERT INTO conversaciones_agente (telefono, identificacion)
         VALUES (%s, %s)
         ON CONFLICT (telefono) DO UPDATE SET
             identificacion = COALESCE(EXCLUDED.identificacion, conversaciones_agente.identificacion),
             fecha_ultima_actividad = NOW()
         RETURNING id
-        """,
-        (telefono, identificacion),
-    )
+    """, (telefono, identificacion))
     return int(cur.fetchone()[0])
 
 
@@ -107,18 +91,12 @@ def record_message(telefono, direccion, autor, contenido, mensaje_meta_id=None,
         with _connection() as conn:
             with conn.cursor() as cur:
                 cid = _conversation_id(cur, telefono, identificacion)
-                cur.execute(
-                    """
+                cur.execute("""
                     INSERT INTO mensajes_agente
-                        (conversacion_id, direccion, autor, contenido,
-                         mensaje_meta_id, tipo_mensaje, metadata)
+                        (conversacion_id, direccion, autor, contenido, mensaje_meta_id, tipo_mensaje, metadata)
                     VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (mensaje_meta_id) DO NOTHING
-                    RETURNING id
-                    """,
-                    (cid, direccion, autor, contenido, mensaje_meta_id,
-                     tipo_mensaje, _json(metadata)),
-                )
+                """, (cid, direccion, autor, contenido, mensaje_meta_id, tipo_mensaje, _json(metadata)))
                 conn.commit()
     except Exception as exc:
         print(f"[CONTROL HUMANO] No se pudo persistir mensaje: {exc!r}", flush=True)
@@ -128,10 +106,7 @@ def _mode(telefono):
     telefono = _normalizar_telefono(telefono)
     with _connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT modo_actual FROM conversaciones_agente WHERE telefono=%s",
-                (telefono,),
-            )
+            cur.execute("SELECT modo_actual FROM conversaciones_agente WHERE telefono=%s", (telefono,))
             row = cur.fetchone()
             return str(row[0]).upper() if row else "AGENTE"
 
@@ -151,40 +126,17 @@ def _set_mode(telefono, usuario, modo, accion):
         with conn.cursor() as cur:
             cid = _conversation_id(cur, telefono)
             if modo == "HUMANO":
-                cur.execute(
-                    """
-                    UPDATE conversaciones_agente
-                    SET modo_actual='HUMANO', usuario_humano=%s,
-                        tomada_en=NOW(), fecha_ultima_actividad=NOW()
-                    WHERE id=%s
-                    """,
-                    (usuario, cid),
-                )
+                cur.execute("UPDATE conversaciones_agente SET modo_actual='HUMANO', usuario_humano=%s, tomada_en=NOW(), fecha_ultima_actividad=NOW() WHERE id=%s", (usuario, cid))
             else:
-                cur.execute(
-                    """
-                    UPDATE conversaciones_agente
-                    SET modo_actual='AGENTE', usuario_humano=NULL,
-                        tomada_en=NULL, fecha_ultima_actividad=NOW()
-                    WHERE id=%s
-                    """,
-                    (cid,),
-                )
-            cur.execute(
-                """
-                INSERT INTO control_agente (conversacion_id, usuario, accion)
-                VALUES (%s, %s, %s)
-                """,
-                (cid, usuario, accion),
-            )
+                cur.execute("UPDATE conversaciones_agente SET modo_actual='AGENTE', usuario_humano=NULL, tomada_en=NULL, fecha_ultima_actividad=NOW() WHERE id=%s", (cid,))
+            cur.execute("INSERT INTO control_agente (conversacion_id, usuario, accion) VALUES (%s, %s, %s)", (cid, usuario, accion))
             conn.commit()
 
 
 def _auth():
     if not SUPERVISION_KEY:
         return False, "AGENT_SUPERVISION_KEY no esta configurada"
-    supplied = request.headers.get("X-Agent-Supervision-Key", "")
-    return supplied == SUPERVISION_KEY, "No autorizado"
+    return request.headers.get("X-Agent-Supervision-Key", "") == SUPERVISION_KEY, "No autorizado"
 
 
 def _register_routes(module):
@@ -212,10 +164,9 @@ def _register_routes(module):
                 with conn.cursor() as cur:
                     params = []
                     sql = """
-                        SELECT c.id, c.telefono, c.identificacion, c.estado,
-                               c.modo_actual, c.usuario_humano, c.fecha_inicio,
-                               c.fecha_ultima_actividad, c.tomada_en,
-                               COUNT(m.id) AS total_mensajes
+                        SELECT c.id, c.telefono, c.identificacion, c.estado, c.modo_actual,
+                               c.usuario_humano, c.fecha_inicio, c.fecha_ultima_actividad,
+                               c.tomada_en, COUNT(m.id) AS total_mensajes
                         FROM conversaciones_agente c
                         LEFT JOIN mensajes_agente m ON m.conversacion_id=c.id
                     """
@@ -226,11 +177,7 @@ def _register_routes(module):
                     params.append(limit)
                     cur.execute(sql, params)
                     filas = cur.fetchall()
-            nombres = [
-                "id", "telefono", "identificacion", "estado", "modo_actual",
-                "usuario_humano", "fecha_inicio", "fecha_ultima_actividad",
-                "tomada_en", "total_mensajes"
-            ]
+            nombres = ["id", "telefono", "identificacion", "estado", "modo_actual", "usuario_humano", "fecha_inicio", "fecha_ultima_actividad", "tomada_en", "total_mensajes"]
             return jsonify({"status": "success", "conversaciones": [dict(zip(nombres, r)) for r in filas]})
         except Exception as exc:
             return jsonify({"status": "error", "mensaje": str(exc)}), 500
@@ -245,25 +192,16 @@ def _register_routes(module):
             limit = min(max(int(request.args.get("limit", 500)), 1), 1000)
             with _connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT m.id, m.direccion, m.autor, m.contenido,
-                               m.mensaje_meta_id, m.tipo_mensaje, m.fecha, m.metadata,
-                               c.telefono, c.identificacion, c.modo_actual, c.usuario_humano
+                    cur.execute("""
+                        SELECT m.id, m.direccion, m.autor, m.contenido, m.mensaje_meta_id,
+                               m.tipo_mensaje, m.fecha, m.metadata, c.telefono,
+                               c.identificacion, c.modo_actual, c.usuario_humano
                         FROM conversaciones_agente c
                         JOIN mensajes_agente m ON m.conversacion_id=c.id
-                        WHERE c.telefono=%s
-                        ORDER BY m.fecha ASC
-                        LIMIT %s
-                        """,
-                        (_normalizar_telefono(telefono), limit),
-                    )
+                        WHERE c.telefono=%s ORDER BY m.fecha ASC LIMIT %s
+                    """, (_normalizar_telefono(telefono), limit))
                     filas = cur.fetchall()
-            nombres = [
-                "id", "direccion", "autor", "contenido", "mensaje_meta_id",
-                "tipo_mensaje", "fecha", "metadata", "telefono", "identificacion",
-                "modo_actual", "usuario_humano"
-            ]
+            nombres = ["id", "direccion", "autor", "contenido", "mensaje_meta_id", "tipo_mensaje", "fecha", "metadata", "telefono", "identificacion", "modo_actual", "usuario_humano"]
             return jsonify({"status": "success", "mensajes": [dict(zip(nombres, r)) for r in filas]})
         except Exception as exc:
             return jsonify({"status": "error", "mensaje": str(exc)}), 500
@@ -318,7 +256,7 @@ def _register_routes(module):
                 return jsonify({"status": "error", "mensaje": "La conversacion no esta bajo control humano"}), 409
             _THREAD_STATE.autor = "HUMANO"
             _THREAD_STATE.usuario = usuario
-            module._HUMAN_ORIGINAL_SEND(_normalizar_telefono(telefono), texto, None)
+            module.enviar_mensaje_whatsapp(_normalizar_telefono(telefono), texto, None)
             return jsonify({"status": "success"})
         except Exception as exc:
             return jsonify({"status": "error", "mensaje": str(exc)}), 500
@@ -328,7 +266,6 @@ def _register_routes(module):
 
 
 def persist_incoming(module, data):
-    """Registra el mensaje y devuelve True si la IA puede procesarlo."""
     try:
         value = data["entry"][0]["changes"][0]["value"]
         message = (value.get("messages") or [{}])[0]
@@ -345,8 +282,7 @@ def persist_incoming(module, data):
             texto = f"[Mensaje tipo {tipo}]"
         match = re.search(r"\d{6,12}", texto or "")
         identificacion = match.group(0) if match else None
-        record_message(telefono, "ENTRANTE", "DEUDOR", texto, mensaje_meta_id=mid,
-                       tipo_mensaje=tipo, identificacion=identificacion)
+        record_message(telefono, "ENTRANTE", "DEUDOR", texto, mensaje_meta_id=mid, tipo_mensaje=tipo, identificacion=identificacion)
         return agent_can_respond(telefono)
     except Exception as exc:
         print(f"[CONTROL HUMANO] No se pudo interceptar mensaje entrante: {exc!r}", flush=True)
