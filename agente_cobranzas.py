@@ -3,7 +3,7 @@ import re
 import requests
 import threading
 import base64
-from datetime import datetime
+from datetime import datetime, date
 from flask import Flask, request, jsonify
 from anthropic import Anthropic
 import psycopg2
