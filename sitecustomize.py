@@ -1,6 +1,8 @@
 """Runtime compatibility and production hardening hooks for the debt agent."""
 
 import builtins
+import hashlib
+import hmac
 import os
 import re
 
@@ -74,6 +76,55 @@ def _safe_text(data):
     except Exception:
         return ""
     return ""
+
+
+def _normalizar_meta_secret(value):
+    """Tolera espacios/comillas accidentales sin relajar la validacion criptografica."""
+    secret = str(value or "").strip()
+    if len(secret) >= 2 and secret[0] == secret[-1] and secret[0] in {"'", '"'}:
+        secret = secret[1:-1].strip()
+    return secret
+
+
+def _instalar_validador_firma_meta(module):
+    """Reemplaza solo la verificacion Meta por una version robusta y fail-closed."""
+    secret = _normalizar_meta_secret(getattr(module, "META_APP_SECRET", None))
+    module.META_APP_SECRET = secret
+
+    def verificar_firma_meta_robusta(raw_body):
+        if not secret:
+            print("[META][ERROR] META_APP_SECRET no esta configurado", flush=True)
+            return False
+
+        firma = module.request.headers.get("X-Hub-Signature-256", "").strip()
+        if not firma.lower().startswith("sha256="):
+            print("[META][WARN] Webhook rechazado: falta X-Hub-Signature-256", flush=True)
+            return False
+
+        proporcionada = firma[7:].strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", proporcionada):
+            print(
+                f"[META][WARN] Webhook rechazado: firma con formato invalido (longitud={len(proporcionada)})",
+                flush=True,
+            )
+            return False
+
+        esperada = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        valida = hmac.compare_digest(proporcionada, esperada)
+        if not valida:
+            print(
+                "[META][WARN] Firma invalida. Verificar que META_APP_SECRET en Render "
+                "sea exactamente el App Secret de Meta Developers.",
+                flush=True,
+            )
+        return valida
+
+    module.verificar_firma_meta = verificar_firma_meta_robusta
+    print(
+        "[META] Validacion X-Hub-Signature-256 endurecida | "
+        f"APP_SECRET={'CONFIGURADO' if secret else 'FALTANTE'}",
+        flush=True,
+    )
 
 
 def _append_internal_context(module, numero, context):
@@ -175,6 +226,8 @@ def _persist_agent_state(module):
         from persistent_state import PersistentState, registrar_evento, eliminar_evento
         import control_humano
         import property_identity
+
+        _instalar_validador_firma_meta(module)
 
         module.memoria_chats = PersistentState("memoria_chat")
         module.obligaciones_activas = PersistentState("obligacion_activa")
