@@ -28,42 +28,471 @@ memoria_chats = {}
 # 🗄️ BASE DE DATOS NEON (CONEXIONES REALES)
 # ==========================================
 def buscar_deuda_en_neon(cedula):
-    """Busca al deudor o codeudor y liquida la deuda exacta usando el Motor Judicial Central (Soportando Tablas Separadas)"""
+    """
+    Busca una obligación por cédula, tanto como TITULAR como CODEUDOR.
+
+    Flujo:
+        Cédula
+          ├──> inmuebles_ph -> contacto
+          └──> procesos_litisconsorcio -> procesos -> inmueble
+
+    La función además deja trazabilidad en los logs para poder comprobar
+    exactamente qué base de Neon está utilizando Render.
+    """
     try:
-        # IMPORTACIÓN BLINDADA: Evita errores de Importación Circular
+        # ==========================================================
+        # 1. NORMALIZAR CÉDULA
+        # ==========================================================
+        cedula_limpia = re.sub(r'\D', '', str(cedula or ''))
+
+        if not cedula_limpia:
+            print("❌ [NEON] Cédula vacía o inválida.", flush=True)
+            return "SISTEMA: No se recibió una cédula válida."
+
+        print(f"\n🔎 [NEON] BUSCANDO CÉDULA: {cedula_limpia}", flush=True)
+
+        # ==========================================================
+        # 2. IMPORTAR MOTOR DE LIQUIDACIÓN
+        # ==========================================================
         try:
             from main import motor_calculo_judicial
         except ImportError as e:
-            return "SISTEMA: Error interno. No se pudo conectar el bot con el Liquidador Judicial."
+            print(
+                f"❌ [NEON] No se pudo importar motor_calculo_judicial: {e}",
+                flush=True
+            )
+            return (
+                "SISTEMA: Error interno. "
+                "No se pudo conectar el bot con el Liquidador Judicial."
+            )
+
+        # ==========================================================
+        # 3. CONECTAR A NEON
+        # ==========================================================
+        if not DATABASE_URL:
+            print("❌ [NEON] DATABASE_URL NO EXISTE EN EL ENTORNO.", flush=True)
+            return (
+                "SISTEMA: Error de configuración de base de datos."
+            )
 
         with psycopg2.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                
-                # 1. BÚSQUEDA CRUZADA (Propietarios y Codeudores en tablas separadas)
-                cur.execute("""
-                    SELECT i.id AS inmueble_id, c.nombre, c.identificacion 
-                    FROM inmuebles_ph i 
-                    JOIN inmuebles_propietarios ip ON i.id = ip.inmueble_id
-                    JOIN contactos c ON ip.contacto_id = c.id 
-                    WHERE c.identificacion = %s
-                    
-                    UNION
-                    
-                    SELECT i.id AS inmueble_id, c.nombre, c.identificacion 
-                    FROM inmuebles_ph i 
-                    JOIN inmuebles_codeudores ic ON i.id = ic.inmueble_id
-                    JOIN contactos c ON ic.contacto_id = c.id 
-                    WHERE c.identificacion = %s
-                """, (cedula, cedula)) # Doble parámetro por el UNION
-                
-                registro = cur.fetchone()
-                
-                # ESCUDO: Si no es propietario ni codeudor, abortar amablemente
-                if not registro:
-                    return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas ni como titular ni como codeudor. Infórmale al usuario que está a paz y salvo."
-                
-                inmueble_id, nombre, identificacion = registro
 
+            with conn.cursor() as cur:
+
+                # --------------------------------------------------
+                # DIAGNÓSTICO DE LA BASE REAL A LA QUE ESTÁ CONECTADO
+                # --------------------------------------------------
+                cur.execute("""
+                    SELECT
+                        current_database(),
+                        current_schema(),
+                        current_user
+                """)
+
+                db_info = cur.fetchone()
+
+                if db_info:
+                    nombre_db, schema_actual, usuario_db = db_info
+
+                    print(
+                        "🗄️ [NEON] CONEXIÓN EXITOSA",
+                        flush=True
+                    )
+                    print(
+                        f"   Base de datos: {nombre_db}",
+                        flush=True
+                    )
+                    print(
+                        f"   Schema: {schema_actual}",
+                        flush=True
+                    )
+                    print(
+                        f"   Usuario DB: {usuario_db}",
+                        flush=True
+                    )
+
+                # ==================================================
+                # 4. BUSCAR TITULAR Y CODEUDOR
+                # ==================================================
+                #
+                # IMPORTANTE:
+                # Para CODEUDOR NO obligamos a que la relación pase
+                # primero por contactos.
+                #
+                # Partimos directamente de:
+                #
+                # procesos_litisconsorcio
+                #       ↓
+                # procesos
+                #       ↓
+                # inmueble_id
+                #
+                # Luego hacemos LEFT JOIN a contactos solamente
+                # para obtener nombre.
+                # ==================================================
+
+                cur.execute("""
+                    WITH candidatos AS (
+
+                        -- =========================================
+                        -- RUTA 1: TITULAR DIRECTO DEL INMUEBLE
+                        -- =========================================
+                        SELECT
+                            i.id AS inmueble_id,
+                            c.nombre,
+                            c.identificacion,
+                            'TITULAR' AS tipo_relacion,
+                            NULL::text AS radicado_interno,
+                            NULL::boolean AS es_principal,
+                            NULL::text AS estado_proceso
+                        FROM inmuebles_ph i
+                        INNER JOIN contactos c
+                            ON c.id = i.contacto_id
+                        WHERE REGEXP_REPLACE(
+                            COALESCE(c.identificacion::text, ''),
+                            '[^0-9]',
+                            '',
+                            'g'
+                        ) = %s
+
+                        UNION
+
+                        -- =========================================
+                        -- RUTA 2: CODEUDOR / LITISCONSORTE
+                        -- =========================================
+                        SELECT
+                            p.inmueble_id,
+                            COALESCE(c.nombre, 'Persona no registrada'),
+                            COALESCE(
+                                c.identificacion,
+                                pl.identificacion_demandado
+                            ),
+                            'CODEUDOR' AS tipo_relacion,
+                            p.radicado_interno,
+                            pl.es_principal,
+                            p.estado
+                        FROM procesos_litisconsorcio pl
+
+                        INNER JOIN procesos p
+                            ON p.radicado_interno = pl.radicado_interno
+
+                        LEFT JOIN contactos c
+                            ON REGEXP_REPLACE(
+                                COALESCE(c.identificacion::text, ''),
+                                '[^0-9]',
+                                '',
+                                'g'
+                            ) = REGEXP_REPLACE(
+                                COALESCE(
+                                    pl.identificacion_demandado::text,
+                                    ''
+                                ),
+                                '[^0-9]',
+                                '',
+                                'g'
+                            )
+
+                        WHERE REGEXP_REPLACE(
+                            COALESCE(
+                                pl.identificacion_demandado::text,
+                                ''
+                            ),
+                            '[^0-9]',
+                            '',
+                            'g'
+                        ) = %s
+                    )
+
+                    SELECT DISTINCT
+                        inmueble_id,
+                        nombre,
+                        identificacion,
+                        tipo_relacion,
+                        radicado_interno,
+                        es_principal,
+                        estado_proceso
+                    FROM candidatos
+                    WHERE inmueble_id IS NOT NULL
+
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(COALESCE(estado_proceso, ''))
+                                 = 'activo'
+                            THEN 0
+                            ELSE 1
+                        END,
+                        CASE
+                            WHEN tipo_relacion = 'CODEUDOR'
+                            THEN 0
+                            ELSE 1
+                        END,
+                        inmueble_id
+                """, (cedula_limpia, cedula_limpia))
+
+                registros = cur.fetchall()
+
+                # ==================================================
+                # 5. DIAGNÓSTICO
+                # ==================================================
+
+                print(
+                    f"🔎 [NEON] REGISTROS ENCONTRADOS: {len(registros)}",
+                    flush=True
+                )
+
+                if registros:
+                    for registro in registros:
+                        (
+                            inmueble_id_tmp,
+                            nombre_tmp,
+                            identificacion_tmp,
+                            tipo_tmp,
+                            radicado_tmp,
+                            principal_tmp,
+                            estado_tmp
+                        ) = registro
+
+                        print(
+                            f"   ✅ {tipo_tmp} | "
+                            f"Inmueble={inmueble_id_tmp} | "
+                            f"Nombre={nombre_tmp} | "
+                            f"CC={identificacion_tmp} | "
+                            f"Proceso={radicado_tmp} | "
+                            f"Principal={principal_tmp} | "
+                            f"Estado={estado_tmp}",
+                            flush=True
+                        )
+
+                # ==================================================
+                # 6. SI NO ENCONTRÓ NADA
+                # ==================================================
+
+                if not registros:
+                    print(
+                        f"❌ [NEON] NO SE ENCONTRÓ {cedula_limpia}",
+                        flush=True
+                    )
+
+                    return (
+                        f"SISTEMA: Se buscó la cédula {cedula_limpia} "
+                        "y no se encontraron obligaciones vinculadas "
+                        "como titular o codeudor."
+                    )
+
+                # ==================================================
+                # 7. TOMAR EL PRIMER INMUEBLE PRIORIZADO
+                # ==================================================
+                #
+                # El ORDER BY anterior prioriza:
+                #   1. Proceso activo
+                #   2. Codeudor
+                #   3. Menor ID de inmueble
+                #
+                # Esto evita el comportamiento ciego de fetchone()
+                # sin ningún criterio.
+                # ==================================================
+
+                (
+                    inmueble_id,
+                    nombre,
+                    identificacion,
+                    tipo_relacion,
+                    radicado_interno,
+                    es_principal,
+                    estado_proceso
+                ) = registros[0]
+
+                print(
+                    "\n🎯 [NEON] OBLIGACIÓN SELECCIONADA:",
+                    flush=True
+                )
+
+                print(
+                    f"   Cédula: {cedula_limpia}",
+                    flush=True
+                )
+
+                print(
+                    f"   Tipo: {tipo_relacion}",
+                    flush=True
+                )
+
+                print(
+                    f"   Inmueble ID: {inmueble_id}",
+                    flush=True
+                )
+
+                print(
+                    f"   Nombre: {nombre}",
+                    flush=True
+                )
+
+                print(
+                    f"   Proceso: {radicado_interno}",
+                    flush=True
+                )
+
+                # ==================================================
+                # 8. VALIDAR QUE EL INMUEBLE EXISTA REALMENTE
+                # ==================================================
+
+                cur.execute("""
+                    SELECT id
+                    FROM inmuebles_ph
+                    WHERE id = %s
+                """, (inmueble_id,))
+
+                inmueble_valido = cur.fetchone()
+
+                if not inmueble_valido:
+                    print(
+                        f"❌ [NEON] El inmueble {inmueble_id} "
+                        "no existe en inmuebles_ph.",
+                        flush=True
+                    )
+
+                    return (
+                        "SISTEMA: La persona está vinculada a un proceso, "
+                        "pero no fue posible localizar el inmueble asociado."
+                    )
+
+                print(
+                    f"✅ [NEON] Inmueble {inmueble_id} confirmado "
+                    "en inmuebles_ph.",
+                    flush=True
+                )
+
+        # ==========================================================
+        # 9. LIQUIDAR LA DEUDA
+        # ==========================================================
+
+        fecha_hoy = date.today()
+
+        tipo_tasa_defecto = "Máxima Legal"
+        tasa_fija_defecto = 0.0
+        honorarios_pct = 23.8
+        gastos = 0.0
+
+        print(
+            f"🧮 [LIQUIDADOR] Calculando inmueble {inmueble_id}...",
+            flush=True
+        )
+
+        resultados, resumen, info_extra = motor_calculo_judicial(
+            inmueble_id,
+            tipo_tasa_defecto,
+            tasa_fija_defecto,
+            honorarios_pct,
+            gastos,
+            fecha_hoy
+        )
+
+        # ==========================================================
+        # 10. EXTRAER RESULTADOS
+        # ==========================================================
+
+        capital = (
+            resumen.get('total_capital', 0.0)
+            if resumen else 0.0
+        )
+
+        intereses = (
+            resumen.get('total_intereses', 0.0)
+            if resumen else 0.0
+        )
+
+        honorarios_calc = (
+            resumen.get('total_honorarios', 0.0)
+            if resumen else 0.0
+        )
+
+        gastos_calc = (
+            resumen.get('total_gastos', 0.0)
+            if resumen else 0.0
+        )
+
+        gran_total = (
+            resumen.get('gran_total', 0.0)
+            if resumen else 0.0
+        )
+
+        print(
+            "💰 [LIQUIDADOR] RESULTADO:",
+            flush=True
+        )
+
+        print(
+            f"   Capital: ${capital:,.0f}",
+            flush=True
+        )
+
+        print(
+            f"   Intereses: ${intereses:,.0f}",
+            flush=True
+        )
+
+        print(
+            f"   Honorarios: ${honorarios_calc:,.0f}",
+            flush=True
+        )
+
+        print(
+            f"   Gastos: ${gastos_calc:,.0f}",
+            flush=True
+        )
+
+        print(
+            f"   GRAN TOTAL: ${gran_total:,.0f}",
+            flush=True
+        )
+
+        # ==========================================================
+        # 11. PAZ Y SALVO
+        # ==========================================================
+
+        if gran_total <= 0:
+            return (
+                f"SISTEMA: La cédula {cedula_limpia} está vinculada "
+                "a una obligación, pero su saldo líquido a la fecha "
+                "es $0. Infórmale el paz y salvo."
+            )
+
+        # ==========================================================
+        # 12. CONTEXTO PARA CLAUDE
+        # ==========================================================
+
+        return f"""
+[SISTEMA INTERNO - ESTADO DE CUENTA OFICIAL]
+
+- Deudor/Codeudor: {nombre}
+- CC: {identificacion}
+- Tipo de relación: {tipo_relacion}
+- Inmueble ID: {inmueble_id}
+- Proceso: {radicado_interno or 'No aplica'}
+- Estado del proceso: {estado_proceso or 'No aplica'}
+
+- Saldo de Capital: ${capital:,.0f}
+- Intereses de Mora Acumulados: ${intereses:,.0f}
+- Honorarios de Abogado ({honorarios_pct}%): ${honorarios_calc:,.0f}
+- Gastos Procesales: ${gastos_calc:,.0f}
+
+- GRAN TOTAL LIQUIDADO A LA FECHA: ${gran_total:,.0f}
+
+REGLA ESTRICTA DE NEGOCIACIÓN:
+El cliente DEBE pagar o negociar sobre el GRAN TOTAL
+(${gran_total:,.0f}). No negocies usando únicamente el capital.
+"""
+    except Exception as e:
+        print(
+            f"❌ [NEON/LIQUIDADOR] ERROR CRÍTICO: {repr(e)}",
+            flush=True
+        )
+
+        return (
+            "SISTEMA: Alerta técnica al calcular la deuda. "
+            "El motor financiero está en pausa. "
+            "Pide al deudor que espere y contacta a un humano."
+        )
         # 2. INVOCAR AL MOTOR MATEMÁTICO CENTRAL
         fecha_hoy = date.today()
         tipo_tasa_defecto = "Máxima Legal"
