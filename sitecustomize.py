@@ -78,7 +78,7 @@ def _persist_agent_state(module):
         return
 
     try:
-        from persistent_state import PersistentState, registrar_evento
+        from persistent_state import PersistentState, registrar_evento, eliminar_evento
         import control_humano
 
         module.memoria_chats = PersistentState("memoria_chat")
@@ -88,26 +88,34 @@ def _persist_agent_state(module):
         original_processor = module.procesar_y_responder
 
         def procesar_y_responder_persistente(data):
+            message_id = None
             try:
                 value = data["entry"][0]["changes"][0]["value"]
                 message = (value.get("messages") or [{}])[0]
                 message_id = message.get("id")
                 numero = message.get("from")
                 if not message_id:
-                    return
+                    return False
                 if not registrar_evento(message_id, numero):
                     print(f"ℹ️ Mensaje duplicado ignorado: {message_id}", flush=True)
-                    return
+                    return True
                 if not control_humano.persist_incoming(module, data):
-                    print(f"👤 Conversacion {numero} bajo control humano; IA no responde", flush=True)
-                    return
+                    print(f"👤 Conversacion {numero} bloqueada para IA o no pudo validarse el modo; no se responde", flush=True)
+                    eliminar_evento(message_id)
+                    return False
+                result = original_processor(data)
+                if result is False:
+                    eliminar_evento(message_id)
+                    return False
+                return True
             except Exception as exc:
-                # Fail closed para idempotencia, como antes. La persistencia de
-                # conversacion es aditiva y no debe romper el webhook si Neon
-                # esta momentaneamente no disponible.
-                print(f"❌ No se pudo validar idempotencia/control humano: {repr(exc)}", flush=True)
-                return
-            return original_processor(data)
+                print(f"❌ No se pudo procesar mensaje de forma segura: {repr(exc)}", flush=True)
+                if message_id:
+                    try:
+                        eliminar_evento(message_id)
+                    except Exception as cleanup_exc:
+                        print(f"❌ No se pudo liberar el evento para reintento: {repr(cleanup_exc)}", flush=True)
+                return False
 
         module.procesar_y_responder = procesar_y_responder_persistente
         module._PERSISTENT_STATE_INSTALLED = True
