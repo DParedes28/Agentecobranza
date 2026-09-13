@@ -19,10 +19,14 @@ El webhook POST valida la firma de Meta cuando `META_APP_SECRET` está configura
 
 El agente nunca calcula la deuda: obtiene los valores exclusivamente desde `/api/bot/liquidar` del ERP.
 
-## Persistencia
+## Persistencia e idempotencia
 
-`memoria_chats` y `obligaciones_activas` siguen siendo memoria local del proceso. La auditoría y las gestiones CRM se guardan en PostgreSQL. Para múltiples réplicas o recuperación completa de conversaciones, la siguiente evolución debe mover el estado conversacional a PostgreSQL/Redis.
+`memoria_chats` y `obligaciones_activas` ahora están respaldados por PostgreSQL/Neon mediante `bot_estado_persistente`, por lo que sobreviven reinicios de Render y funcionan entre workers.
+
+Los `message_id` recibidos de WhatsApp se registran en `bot_eventos_procesados`. Un mismo evento no se procesa dos veces, incluso si Meta lo reintenta.
+
+La migración está en `migrations/001_persistent_state.sql`. El agente también verifica/crea las tablas al arrancar, por lo que el deploy no depende de ejecutar manualmente el SQL antes de levantar el servicio.
 
 ## Operación
 
-El webhook responde rápidamente y procesa el mensaje en segundo plano. Meta puede reintentar eventos; el siguiente endurecimiento recomendado es una tabla de idempotencia por `message_id` para garantizar procesamiento exactamente una vez.
+El webhook responde rápidamente y procesa el mensaje en segundo plano. El estado financiero sigue siendo responsabilidad exclusiva del ERP/liquidador central; esta migración solo persiste contexto conversacional y la obligación seleccionada.
