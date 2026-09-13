@@ -9,7 +9,7 @@ import psycopg2
 from flask import jsonify, request
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-SUPERVISION_KEY = os.getenv("AGENT_SUPERVISION_KEY") or os.getenv("LIQUIDADOR_API_KEY")
+SUPERVISION_KEY = os.getenv("AGENT_SUPERVISION_KEY")
 _THREAD_STATE = threading.local()
 
 SCHEMA_SQL = """
