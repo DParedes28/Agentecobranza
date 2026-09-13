@@ -217,9 +217,37 @@ def _conversation_lock(numero, callback):
             pass
 
 
+def _instalar_prompt_detallado(module):
+    """Conecta el prompt centralizado sin modificar el flujo de negocio."""
+    try:
+        from prompt_policy import SYSTEM_PROMPT
+    except Exception as exc:
+        print(f"⚠️ No se pudo cargar prompt_policy.py: {exc!r}", flush=True)
+        return
+
+    client = getattr(module, "cliente_ia", None)
+    messages = getattr(client, "messages", None)
+    if messages is None or not hasattr(messages, "create"):
+        print("⚠️ Cliente Anthropic no disponible para instalar prompt centralizado", flush=True)
+        return
+    if getattr(messages, "_ERP_PROMPT_PATCHED", False):
+        return
+
+    original_create = messages.create
+
+    def create_with_policy(*args, **kwargs):
+        kwargs["system"] = SYSTEM_PROMPT
+        return original_create(*args, **kwargs)
+
+    messages.create = create_with_policy
+    messages._ERP_PROMPT_PATCHED = True
+    print("✅ Prompt de cobranza detallado centralizado activado", flush=True)
+
+
 def _persist_agent_state(module):
     global _state_hook_installed
     if getattr(module, "_PERSISTENT_STATE_INSTALLED", False):
+        _instalar_prompt_detallado(module)
         return
 
     try:
@@ -232,6 +260,7 @@ def _persist_agent_state(module):
         module.memoria_chats = PersistentState("memoria_chat")
         module.obligaciones_activas = PersistentState("obligacion_activa")
         control_humano.install(module)
+        _instalar_prompt_detallado(module)
 
         original_lookup = module.buscar_deuda_en_neon
 
