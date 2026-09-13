@@ -115,8 +115,8 @@ def agent_can_respond(telefono):
     try:
         return _mode(telefono) != "HUMANO"
     except Exception as exc:
-        print(f"[CONTROL HUMANO] No se pudo leer modo; se mantiene AGENTE: {exc!r}", flush=True)
-        return True
+        print(f"[CONTROL HUMANO] No se pudo leer modo; se bloquea la IA por seguridad: {exc!r}", flush=True)
+        return False
 
 
 def _set_mode(telefono, usuario, modo, accion):
@@ -306,8 +306,8 @@ def persist_incoming(module, data):
         record_message(telefono, "ENTRANTE", "DEUDOR", texto, mensaje_meta_id=mid, tipo_mensaje=tipo, identificacion=identificacion)
         return agent_can_respond(telefono)
     except Exception as exc:
-        print(f"[CONTROL HUMANO] No se pudo interceptar mensaje entrante: {exc!r}", flush=True)
-        return True
+        print(f"[CONTROL HUMANO] No se pudo interceptar mensaje entrante; se bloquea la IA por seguridad: {exc!r}", flush=True)
+        return False
 
 
 def install(module):
