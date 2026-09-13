@@ -99,8 +99,12 @@ def _persist_agent_state(module):
                 if not registrar_evento(message_id, numero):
                     print(f"ℹ️ Mensaje duplicado ignorado: {message_id}", flush=True)
                     return True
-                if not control_humano.persist_incoming(module, data):
-                    print(f"👤 Conversacion {numero} bloqueada para IA o no pudo validarse el modo; no se responde", flush=True)
+                control_result = control_humano.persist_incoming(module, data)
+                if control_result is False:
+                    print(f"👤 Conversacion {numero} bajo control humano; IA no responde", flush=True)
+                    return True
+                if control_result is None:
+                    print(f"⚠️ No se pudo validar el control humano para {numero}; se libera el evento para reintento", flush=True)
                     eliminar_evento(message_id)
                     return False
                 result = original_processor(data)
