@@ -28,13 +28,10 @@ memoria_chats = {}
 # 🗄️ BASE DE DATOS NEON (CONEXIONES REALES)
 # ==========================================
 def buscar_deuda_en_neon(cedula):
-    """Busca deudas activas en Cartera Comercial y Propiedad Horizontal calculando la liquidación integral"""
+    """Busca deudas activas en Cartera Comercial y Propiedad Horizontal (Incluyendo Codeudores)"""
     try:
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # Forzar hora de Colombia
-                cur.execute("SET TIME ZONE 'America/Bogota';")
-                
                 # 1. Buscar en Cartera Comercial (Obligaciones)
                 cur.execute("""
                     SELECT o.capital, o.tipo_titulo, c.nombre 
@@ -44,17 +41,27 @@ def buscar_deuda_en_neon(cedula):
                 """, (cedula,))
                 res_comercial = cur.fetchall()
                 
-                # 2. Buscar en Propiedad Horizontal (Expensas)
+                # 2. Buscar en Propiedad Horizontal (Expensas) - MEGA CONSULTA CON UNION
+                # Busca tanto al deudor principal como a los codeudores (litisconsorcio)
                 cur.execute("""
-                    SELECT e.valor_capital, e.concepto, e.fecha_vencimiento, c.nombre 
+                    SELECT e.valor_capital, e.concepto, c.nombre 
                     FROM expensas_ph e
                     JOIN inmuebles_ph i ON e.inmueble_id = i.id
                     JOIN contactos c ON i.contacto_id = c.id
                     WHERE c.identificacion = %s AND (e.estado != 'Pagada' OR e.estado IS NULL)
-                    ORDER BY e.fecha_vencimiento ASC
-                """, (cedula,))
+                    
+                    UNION
+                    
+                    SELECT e.valor_capital, e.concepto, c.nombre 
+                    FROM expensas_ph e
+                    JOIN procesos p ON e.inmueble_id = p.inmueble_id
+                    JOIN procesos_litisconsorcio pl ON p.radicado_interno = pl.radicado_interno
+                    JOIN contactos c ON pl.identificacion_demandado = c.identificacion
+                    WHERE c.identificacion = %s AND (e.estado != 'Pagada' OR e.estado IS NULL)
+                """, (cedula, cedula)) # Pasamos la cédula dos veces por las dos consultas del UNION
                 res_ph = cur.fetchall()
                 
+                # Si no encuentra nada en ninguna de las dos tablas
                 if not res_comercial and not res_ph:
                     return f"SISTEMA: Se buscó la cédula {cedula} pero NO se encontraron deudas activas. Infórmale al usuario que se encuentra a paz y salvo."
                     
@@ -69,14 +76,15 @@ def buscar_deuda_en_neon(cedula):
                         total_capital += float(r[0])
                         
                 if res_ph:
-                    if not nombre: nombre = res_ph[0][3]
+                    if not nombre: nombre = res_ph[0][2]
                     for r in res_ph:
-                        detalles.append(f"- {r[1]} (Causada: {r[2]}): ${r[0]:,.0f}")
+                        detalles.append(f"- {r[1]} (Admin PH): ${r[0]:,.0f}")
                         total_capital += float(r[0])
                 
-                intereses_mora = total_capital * 0.15 
-                honorarios = (total_capital + intereses_mora) * 0.238 
-                gastos_procesales = 0.0 
+                # Componentes jurídicos de la liquidación integral
+                intereses_mora = total_capital * 0.15 # Tasa estimada o calculada
+                honorarios = (total_capital + intereses_mora) * 0.238 # 23.8% de honorarios estándar
+                gastos_procesales = 0.0 # Gastos de tramitación
                 gran_total = total_capital + intereses_mora + honorarios + gastos_procesales
                 
                 texto_detalle = "\n".join(detalles)
