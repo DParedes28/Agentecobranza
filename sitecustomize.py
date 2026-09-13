@@ -1,12 +1,10 @@
 """Runtime compatibility patch for the WhatsApp debt agent.
 
-PostgreSQL rejects SELECT DISTINCT queries whose ORDER BY expressions are not
-present in the select list. The current deployed agent contains exactly that
-pattern in the codeudor lookup. This small compatibility layer rewrites only
-that query at runtime, without changing any financial logic.
+The deployed agent contains a PostgreSQL query that combines SELECT DISTINCT
+with ORDER BY CASE expressions that are not in the select list. PostgreSQL
+rejects that query. We surgically remove DISTINCT only for that codeudor query;
+the application already performs its own deterministic selection afterwards.
 """
-
-import re
 
 try:
     import psycopg2
@@ -22,26 +20,16 @@ if psycopg2 is not None:
             self._cursor = cursor
 
         def execute(self, query, vars=None):
-            if isinstance(query, str) and "procesos_litisconsorcio" in query and "SELECT DISTINCT" in query:
-                query = re.sub(
-                    r"(\s+p\.estado\s*\n\s+FROM\s+procesos_litisconsorcio)",
-                    "\\1",
-                    query,
-                    count=1,
-                )
-
-                # Add the ORDER BY expressions to SELECT DISTINCT as aliases.
-                if "AS prioridad_estado" not in query:
-                    query = query.replace(
-                        "                        p.estado\n                    FROM procesos_litisconsorcio pl",
-                        "                        p.estado,\n                        CASE WHEN LOWER(COALESCE(p.estado, '')) = 'activo' THEN 0 ELSE 1 END AS prioridad_estado,\n                        CASE WHEN COALESCE(pl.es_principal, false) THEN 0 ELSE 1 END AS prioridad_principal\n                    FROM procesos_litisconsorcio pl",
-                        1,
-                    )
-                    query = query.replace(
-                        "                        CASE WHEN LOWER(COALESCE(p.estado, '')) = 'activo' THEN 0 ELSE 1 END,\n                        CASE WHEN COALESCE(pl.es_principal, false) THEN 0 ELSE 1 END,\n                        p.inmueble_id",
-                        "                        prioridad_estado,\n                        prioridad_principal,\n                        p.inmueble_id",
-                        1,
-                    )
+            if (
+                isinstance(query, str)
+                and "procesos_litisconsorcio" in query
+                and "SELECT DISTINCT" in query
+                and "ORDER BY" in query
+                and "LOWER(COALESCE(p.estado" in query
+            ):
+                # The result columns must remain exactly the six columns expected
+                # by agente_cobranzas.py, so do not add ORDER BY expressions to SELECT.
+                query = query.replace("SELECT DISTINCT", "SELECT", 1)
             return self._cursor.execute(query, vars)
 
         def __getattr__(self, name):
