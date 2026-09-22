@@ -15,53 +15,6 @@ except Exception:
 if psycopg2 is not None:
     _original_connect = psycopg2.connect
 
-    class _CursorProxy:
-        def __init__(self, cursor):
-            self._cursor = cursor
-
-        def execute(self, query, vars=None):
-            if (
-                isinstance(query, str)
-                and "procesos_litisconsorcio" in query
-                and "SELECT DISTINCT" in query
-                and "ORDER BY" in query
-                and "LOWER(COALESCE(p.estado" in query
-            ):
-                query = query.replace("SELECT DISTINCT", "SELECT", 1)
-            return self._cursor.execute(query, vars)
-
-        def __getattr__(self, name):
-            return getattr(self._cursor, name)
-
-        def __enter__(self):
-            self._cursor.__enter__()
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            return self._cursor.__exit__(exc_type, exc_value, traceback)
-
-    class _ConnectionProxy:
-        def __init__(self, connection):
-            self._connection = connection
-
-        def cursor(self, *args, **kwargs):
-            return _CursorProxy(self._connection.cursor(*args, **kwargs))
-
-        def __getattr__(self, name):
-            return getattr(self._connection, name)
-
-        def __enter__(self):
-            self._connection.__enter__()
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            return self._connection.__exit__(exc_type, exc_value, traceback)
-
-    def _patched_connect(*args, **kwargs):
-        return _ConnectionProxy(_original_connect(*args, **kwargs))
-
-    psycopg2.connect = _patched_connect
-
 
 _state_hook_installed = False
 _original_import = builtins.__import__

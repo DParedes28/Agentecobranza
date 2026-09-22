@@ -98,6 +98,15 @@ def reportar_abono_al_erp(inmueble_id, valor, fecha_pago=None, banco="Transferen
         return None
 
 
+def _fecha_iso(value):
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    text = str(value).strip()
+    return text or None
+
+
 def buscar_deuda_en_neon(cedula, numero_cliente=None):
     try:
         cedula_limpia = re.sub(r"\D", "", str(cedula or ""))
@@ -117,23 +126,24 @@ def buscar_deuda_en_neon(cedula, numero_cliente=None):
                 titulares = cur.fetchall()
                 cur.execute("""
                     SELECT p.inmueble_id, COALESCE(c.nombre, 'Persona no registrada'),
-                           pl.identificacion_demandado, p.radicado_interno,
-                           pl.es_principal, p.estado
-                    FROM procesos_litisconsorcio pl
-                    INNER JOIN procesos p ON p.radicado_interno = pl.radicado_interno
-                    LEFT JOIN contactos c ON REGEXP_REPLACE(COALESCE(c.identificacion::text, ''), '[^0-9]', '', 'g') =
-                        REGEXP_REPLACE(COALESCE(pl.identificacion_demandado::text, ''), '[^0-9]', '', 'g')
-                    WHERE REGEXP_REPLACE(COALESCE(pl.identificacion_demandado::text, ''), '[^0-9]', '', 'g') = %s
+                           c.identificacion, pp.radicado_interno,
+                           pp.es_principal, p.estado, pp.fecha_vinculacion
+                    FROM proceso_partes pp
+                    INNER JOIN procesos p ON p.radicado_interno = pp.radicado_interno
+                    INNER JOIN contactos c ON c.id = pp.contacto_id
+                    WHERE pp.rol = 'DEMANDADO'
+                      AND REGEXP_REPLACE(COALESCE(c.identificacion::text, ''), '[^0-9]', '', 'g') = %s
                     ORDER BY CASE WHEN LOWER(COALESCE(p.estado, '')) = 'activo' THEN 0 ELSE 1 END,
-                             CASE WHEN COALESCE(pl.es_principal, false) THEN 0 ELSE 1 END,
-                             p.inmueble_id
+                             CASE WHEN COALESCE(pp.es_principal, false) THEN 0 ELSE 1 END,
+                             p.inmueble_id,
+                             pp.fecha_vinculacion DESC NULLS LAST
                 """, (cedula_limpia,))
                 codeudores = cur.fetchall()
                 candidatos = []
                 for r in titulares:
-                    candidatos.append({"inmueble_id": r[0], "nombre": r[1], "identificacion": r[2], "tipo_relacion": "TITULAR", "radicado_interno": None, "es_principal": None, "estado": None})
+                    candidatos.append({"inmueble_id": r[0], "nombre": r[1], "identificacion": r[2], "tipo_relacion": "TITULAR", "radicado_interno": None, "es_principal": None, "fecha_vinculacion": None, "estado": None})
                 for r in codeudores:
-                    candidatos.append({"inmueble_id": r[0], "nombre": r[1], "identificacion": r[2], "tipo_relacion": "CODEUDOR", "radicado_interno": r[3], "es_principal": r[4], "estado": r[5]})
+                    candidatos.append({"inmueble_id": r[0], "nombre": r[1], "identificacion": r[2], "tipo_relacion": "CODEUDOR", "radicado_interno": r[3], "es_principal": r[4], "fecha_vinculacion": _fecha_iso(r[6]), "estado": r[5]})
                 if not candidatos:
                     return f"SISTEMA: No encontramos obligaciones relacionadas con la cedula {cedula_limpia}."
                 def prioridad(c):
@@ -149,9 +159,11 @@ def buscar_deuda_en_neon(cedula, numero_cliente=None):
                 identificacion = seleccionado["identificacion"]
                 tipo_relacion = seleccionado["tipo_relacion"]
                 radicado_interno = seleccionado["radicado_interno"]
+                es_principal = seleccionado["es_principal"]
+                fecha_vinculacion = seleccionado["fecha_vinculacion"]
                 estado = seleccionado["estado"]
         if numero_cliente:
-            obligaciones_activas[numero_cliente] = {"cedula": cedula_limpia, "inmueble_id": inmueble_id, "nombre": nombre, "identificacion": identificacion, "tipo_relacion": tipo_relacion, "radicado_interno": radicado_interno}
+            obligaciones_activas[numero_cliente] = {"cedula": cedula_limpia, "inmueble_id": inmueble_id, "nombre": nombre, "identificacion": identificacion, "tipo_relacion": tipo_relacion, "radicado_interno": radicado_interno, "es_principal": es_principal, "fecha_vinculacion": fecha_vinculacion}
         try:
             datos = solicitar_liquidacion(inmueble_id, fecha_colombia())
         except Exception:

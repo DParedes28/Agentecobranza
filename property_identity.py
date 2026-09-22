@@ -77,9 +77,11 @@ def find_property_matches(torre: str, apto: str, conjunto: Optional[str] = None,
                 OR EXISTS (
                     SELECT 1
                     FROM procesos p
-                    JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
+                    JOIN proceso_partes pp ON pp.radicado_interno = p.radicado_interno
+                    JOIN contactos cd ON cd.id = pp.contacto_id
                     WHERE p.inmueble_id = i.id
-                      AND regexp_replace(coalesce(pl.identificacion_demandado::text, ''), '[^0-9]', '', 'g') = %s
+                      AND pp.rol = 'DEMANDADO'
+                      AND regexp_replace(coalesce(cd.identificacion::text, ''), '[^0-9]', '', 'g') = %s
                 )
           )
         """
@@ -119,9 +121,11 @@ def verify_identity_for_property(cedula: str, inmueble_id: int) -> bool:
                 ) OR EXISTS (
                     SELECT 1
                     FROM procesos p
-                    JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
+                    JOIN proceso_partes pp ON pp.radicado_interno = p.radicado_interno
+                    JOIN contactos cd ON cd.id = pp.contacto_id
                     WHERE p.inmueble_id = %s
-                      AND regexp_replace(coalesce(pl.identificacion_demandado::text, ''), '[^0-9]', '', 'g') = %s
+                      AND pp.rol = 'DEMANDADO'
+                      AND regexp_replace(coalesce(cd.identificacion::text, ''), '[^0-9]', '', 'g') = %s
                 )
                 """,
                 (int(inmueble_id), clean, int(inmueble_id), clean),
