@@ -360,6 +360,52 @@ def _set_mode(telefono, usuario, modo, accion):
             conn.commit()
 
 
+def _avisar_webhook_escalamiento(telefono: str, motivo: str) -> None:
+    """POST opcional a SUPERVISION_IA_WEBHOOK_URL / BOT_ESCALATION_WEBHOOK_URL."""
+    url = (
+        os.getenv("SUPERVISION_IA_WEBHOOK_URL")
+        or os.getenv("BOT_ESCALATION_WEBHOOK_URL")
+        or ""
+    ).strip()
+    if not url:
+        return
+    try:
+        import urllib.request
+
+        payload = json.dumps(
+            {
+                "evento": "escalar_humano",
+                "origen": "agentecobranza",
+                "telefono": _normalizar_telefono(telefono),
+                "motivo": motivo,
+                "modo": "HUMANO",
+                "mensaje": f"El bot escaló la conversación {telefono} a humano ({motivo})",
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            resp.read()
+    except Exception as exc:
+        print(f"[CONTROL HUMANO] Webhook de escalamiento no disponible: {exc!r}", flush=True)
+
+
+def escalar_humano(telefono: str, motivo: str = "ESCALAR_HUMANO", usuario: str = "Bot IA") -> bool:
+    """Pasa la conversación a modo HUMANO y notifica si hay webhook."""
+    try:
+        _set_mode(telefono, usuario, "HUMANO", motivo)
+        _avisar_webhook_escalamiento(telefono, motivo)
+        return True
+    except Exception as exc:
+        print(f"[CONTROL HUMANO] No se pudo escalar a humano: {exc!r}", flush=True)
+        return False
+
+
 def _auth():
     if not SUPERVISION_KEY:
         return False, "AGENT_SUPERVISION_KEY no esta configurada"
@@ -716,14 +762,28 @@ def persist_incoming(module, data):
         if tipo == "text":
             texto = message.get("text", {}).get("body", "")[:4000]
         elif tipo == "image":
-            texto = "[Imagen recibida; presumiblemente comprobante de pago]"
+            caption = str((message.get("image") or {}).get("caption") or "").strip()
+            if caption:
+                texto = caption[:4000]
+            else:
+                texto = (
+                    "[Imagen recibida. Clasificar: comprobante / carta-cobro / "
+                    "cedula / otro. No presumir comprobante.]"
+                )
         elif tipo in {"document", "documento"}:
             filename = (message.get("document") or {}).get("filename") or "documento"
             texto = f"[Documento recibido: {filename}]"
         else:
             texto = f"[Mensaje tipo {tipo}]"
-        match = re.search(r"\d{6,12}", texto or "")
-        identificacion = match.group(0) if match else None
+        identificacion = None
+        try:
+            from agente_cobranzas import extraer_cedula as _extraer_cedula
+
+            identificacion = _extraer_cedula(texto)
+        except Exception:
+            match = re.search(r"(?<![0-9.,$])\d{6,10}(?![0-9.,])", texto or "")
+            if match and not re.fullmatch(r"3\d{9}", match.group(0)):
+                identificacion = match.group(0)
         metadata = construir_metadata_media(message, tipo)
         record_message(
             telefono,

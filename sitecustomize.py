@@ -106,7 +106,18 @@ def _prepare_property_context(module, data, property_identity):
 
     state = module.obligaciones_activas.get(numero, {}) or {}
     verified_cedula = state.get("cedula") if state.get("identidad_confirmada") else None
-    cedula_in_message = module.extraer_cedula(text) if hasattr(module, "extraer_cedula") else None
+    if hasattr(module, "extraer_cedula"):
+        try:
+            cedula_in_message = module.extraer_cedula(
+                text,
+                sesion_cedula=verified_cedula,
+                identidad_confirmada=bool(verified_cedula),
+            )
+        except TypeError:
+            # Compat con firma antigua sin kwargs.
+            cedula_in_message = module.extraer_cedula(text)
+    else:
+        cedula_in_message = None
     cedula = cedula_in_message or verified_cedula
 
     try:
