@@ -264,7 +264,9 @@ def _persist_agent_state(module):
                 value = data["entry"][0]["changes"][0]["value"]
                 message = (value.get("messages") or [{}])[0]
                 message_id = message.get("id")
-                numero = message.get("from")
+                numero, _conv_meta = control_humano.resolver_identidad_whatsapp(message, value)
+                if not numero:
+                    numero = message.get("from")
                 if not message_id:
                     return False
                 if not registrar_evento(message_id, numero):

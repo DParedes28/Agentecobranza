@@ -14,8 +14,19 @@ Configurar como variables de entorno:
 - `LIQUIDADOR_API_URL=https://gestionjudicial.onrender.com`
 - `LIQUIDADOR_API_KEY` — misma clave configurada en el ERP
 - `AGENT_SUPERVISION_KEY` — clave independiente y compartida con el proxy de supervisión del ERP
+- `PUBLIC_BASE_URL` o `RENDER_EXTERNAL_URL` — base pública del bot (URLs firmadas de comprobantes en supervisión)
+- `BOT_MEDIA_DIR` (opcional; default `/tmp/bot_media_supervision`) — almacenamiento local de imágenes/documentos
+- `BOT_MEDIA_URL_TTL` (opcional; default `604800` = 7 días) — vigencia de `media_url` firmada
+- `BOT_MEDIA_PUBLIC_SECRET` (opcional; fallback `AGENT_SUPERVISION_KEY`) — firma HMAC de `/control/media/...`
 
 No reutilizar `LIQUIDADOR_API_KEY` como clave de supervisión.
+
+### Supervisión ERP (campos API)
+
+`GET /control/conversaciones` expone `ultimo_mensaje` / `last_message`, `wa_id`, `psid`, `conversation_key` y `phone`.
+
+`GET /control/conversaciones/{telefono}/mensajes` expone `metadata.media_url` (y top-level `media_url`) cuando el comprobante se pudo persistir localmente; si no, al menos `metadata.media_id`.
+
 
 ## Seguridad
 
