@@ -68,5 +68,77 @@ class LlavesErpTests(unittest.TestCase):
             self.assertEqual(self.ag.llave_erp_recaudos(), "vieja")
 
 
+class MediaSecretTests(unittest.TestCase):
+    ENV = ("BOT_MEDIA_PUBLIC_SECRET", "BOT_MEDIA_PUBLIC_SECRET_PREVIOUS", "BOT_MEDIA_LEGACY_FALLBACK")
+
+    def _env(self, **kw):
+        base = {k: "" for k in self.ENV}
+        base.update(kw)
+        return patch.dict(os.environ, base)
+
+    def _verifica(self, secret, filename="a.jpg", delta=300):
+        import time
+
+        expires = int(time.time()) + delta
+        return filename, expires, ch._sign_media(filename, expires, secret)
+
+    def test_firma_con_propio_independiente_de_supervision(self):
+        with self._env(BOT_MEDIA_PUBLIC_SECRET="media-nuevo"), patch.object(
+            ch, "SUPERVISION_KEY", "sup-1"
+        ):
+            self.assertEqual(ch._media_signing_secret(), "media-nuevo")
+        with self._env(BOT_MEDIA_PUBLIC_SECRET="media-nuevo"), patch.object(
+            ch, "SUPERVISION_KEY", "sup-2"
+        ):
+            f, e, t = self._verifica("media-nuevo")
+            self.assertTrue(ch._media_token_valido(f, e, t))
+
+    def test_rotar_supervision_no_rompe_enlaces_con_propio(self):
+        with self._env(BOT_MEDIA_PUBLIC_SECRET="media-nuevo"), patch.object(
+            ch, "SUPERVISION_KEY", "sup-1"
+        ):
+            f, e, t = self._verifica(ch._media_signing_secret())
+        with self._env(BOT_MEDIA_PUBLIC_SECRET="media-nuevo"), patch.object(
+            ch, "SUPERVISION_KEY", "sup-ROTADA"
+        ):
+            self.assertTrue(ch._media_token_valido(f, e, t))
+
+    def test_enlaces_viejos_firmados_con_supervision_siguen_abriendo(self):
+        with self._env(), patch.object(ch, "SUPERVISION_KEY", "sup-1"), patch.object(
+            ch, "TOKEN_META", None
+        ):
+            f, e, t = self._verifica(ch._media_signing_secret())
+            self.assertEqual(ch._media_signing_secret(), "sup-1")
+        with self._env(BOT_MEDIA_PUBLIC_SECRET="media-nuevo"), patch.object(
+            ch, "SUPERVISION_KEY", "sup-1"
+        ), patch.object(ch, "TOKEN_META", None):
+            self.assertTrue(ch._media_token_valido(f, e, t))
+
+    def test_previous_cubre_secreto_anterior(self):
+        with self._env(
+            BOT_MEDIA_PUBLIC_SECRET="media-nuevo",
+            BOT_MEDIA_PUBLIC_SECRET_PREVIOUS="media-viejo",
+            BOT_MEDIA_LEGACY_FALLBACK="false",
+        ), patch.object(ch, "SUPERVISION_KEY", "sup-x"):
+            self.assertTrue(ch._media_token_valido(*self._verifica("media-viejo")))
+            self.assertTrue(ch._media_token_valido(*self._verifica("media-nuevo")))
+            self.assertFalse(ch._media_token_valido(*self._verifica("sup-x")))
+            self.assertFalse(ch._media_token_valido(*self._verifica("otro")))
+
+    def test_sin_respaldo_heredado_no_firma_ni_valida(self):
+        with self._env(BOT_MEDIA_LEGACY_FALLBACK="false"), patch.object(
+            ch, "SUPERVISION_KEY", "sup-1"
+        ), patch.object(ch, "TOKEN_META", "tm"):
+            self.assertEqual(ch._media_signing_secret(), "")
+            self.assertEqual(ch._media_verify_secrets(), [])
+            self.assertFalse(ch._media_token_valido("a.jpg", 9999999999, "x"))
+
+    def test_token_vacio_o_incorrecto(self):
+        with self._env(BOT_MEDIA_PUBLIC_SECRET="media-nuevo"):
+            f, e, _ = self._verifica("media-nuevo")
+            self.assertFalse(ch._media_token_valido(f, e, ""))
+            self.assertFalse(ch._media_token_valido(f, e, "deadbeef"))
+
+
 if __name__ == "__main__":
     unittest.main()
