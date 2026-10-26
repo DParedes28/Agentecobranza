@@ -19,16 +19,50 @@ from flask import jsonify, request, send_file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPERVISION_KEY = os.getenv("AGENT_SUPERVISION_KEY")
+# Llave "siguiente" opcional: permite rotar sin corte (se aceptan ambas hasta promover la nueva).
+SUPERVISION_KEY_NEXT = (os.getenv("AGENT_SUPERVISION_KEY_NEXT") or "").strip()
 TOKEN_META = os.getenv("TOKEN_META")
 _THREAD_STATE = threading.local()
 _MEDIA_DIR = Path(os.getenv("BOT_MEDIA_DIR") or "/tmp/bot_media_supervision")
 _MEDIA_TTL = int(os.getenv("BOT_MEDIA_URL_TTL", "604800"))  # 7 días
-_MEDIA_SECRET = (
-    os.getenv("BOT_MEDIA_PUBLIC_SECRET")
-    or SUPERVISION_KEY
-    or TOKEN_META
-    or ""
-).strip()
+
+
+def _limpiar(valor) -> str:
+    return (valor or "").strip().strip('"').strip("'").strip()
+
+
+def _media_signing_secret() -> str:
+    """Secreto para firmar enlaces de media.
+
+    Propio (BOT_MEDIA_PUBLIC_SECRET) si existe. Solo mientras no esté configurado
+    y el respaldo heredado siga habilitado se usa el histórico (llave de supervisión
+    o TOKEN_META), igual que antes.
+    """
+    propio = _limpiar(os.getenv("BOT_MEDIA_PUBLIC_SECRET"))
+    if propio:
+        return propio
+    if not _media_legacy_fallback():
+        return ""
+    return _limpiar(SUPERVISION_KEY) or _limpiar(TOKEN_META)
+
+
+def _media_legacy_fallback() -> bool:
+    return _limpiar(os.getenv("BOT_MEDIA_LEGACY_FALLBACK")).lower() not in {"0", "false", "no", "off", "n"}
+
+
+def _media_verify_secrets() -> list:
+    """Secretos válidos para verificar enlaces ya emitidos (sin vacíos ni duplicados)."""
+    candidatos = [
+        _limpiar(os.getenv("BOT_MEDIA_PUBLIC_SECRET")),
+        _limpiar(os.getenv("BOT_MEDIA_PUBLIC_SECRET_PREVIOUS")),
+    ]
+    if _media_legacy_fallback():
+        candidatos += [_limpiar(SUPERVISION_KEY), _limpiar(TOKEN_META)]
+    vistos = []
+    for c in candidatos:
+        if c and c not in vistos:
+            vistos.append(c)
+    return vistos
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS conversaciones_agente (
@@ -130,14 +164,24 @@ def _public_base_url() -> str:
     ).rstrip("/")
 
 
-def _sign_media(filename: str, expires: int) -> str:
+def _sign_media(filename: str, expires: int, secret: Optional[str] = None) -> str:
+    clave = _media_signing_secret() if secret is None else secret
     payload = f"{filename}|{expires}".encode("utf-8")
-    return hmac.new(_MEDIA_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return hmac.new(clave.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def _media_token_valido(filename: str, expires: int, token: str) -> bool:
+    ok = False
+    for secreto in _media_verify_secrets():
+        esperado = _sign_media(filename, expires, secreto)
+        if token and hmac.compare_digest(esperado.encode("utf-8"), token.encode("utf-8")):
+            ok = True
+    return ok
 
 
 def build_signed_media_url(filename: str, base_url: Optional[str] = None) -> str:
-    if not _MEDIA_SECRET:
-        raise RuntimeError("BOT_MEDIA_PUBLIC_SECRET/AGENT_SUPERVISION_KEY no está configurada")
+    if not _media_signing_secret():
+        raise RuntimeError("BOT_MEDIA_PUBLIC_SECRET no está configurada")
     expires = int(time.time()) + _MEDIA_TTL
     token = _sign_media(filename, expires)
     root = (base_url or _public_base_url()).rstrip("/")
@@ -406,10 +450,27 @@ def escalar_humano(telefono: str, motivo: str = "ESCALAR_HUMANO", usuario: str =
         return False
 
 
+def _supervision_keys_validas():
+    return [k for k in ((SUPERVISION_KEY or "").strip(), SUPERVISION_KEY_NEXT) if k]
+
+
+def _llave_supervision_valida(suministrada):
+    validas = _supervision_keys_validas()
+    if not suministrada or not validas:
+        return False
+    d_sum = hashlib.sha256(suministrada.encode("utf-8")).digest()
+    ok = False
+    for k in validas:
+        if hmac.compare_digest(d_sum, hashlib.sha256(k.encode("utf-8")).digest()):
+            ok = True
+    return ok
+
+
 def _auth():
-    if not SUPERVISION_KEY:
+    if not _supervision_keys_validas():
         return False, "AGENT_SUPERVISION_KEY no esta configurada"
-    return request.headers.get("X-Agent-Supervision-Key", "") == SUPERVISION_KEY, "No autorizado"
+    suministrada = request.headers.get("X-Agent-Supervision-Key", "")
+    return _llave_supervision_valida(suministrada), "No autorizado"
 
 
 def _fila_conversacion(row_tuple, nombres):
@@ -606,7 +667,7 @@ def _register_routes(module):
     @module.app.get("/control/media/<path:filename>")
     def control_media(filename):
         """Sirve comprobantes con URL firmada (sin header; usable en <img> del ERP)."""
-        if not _MEDIA_SECRET:
+        if not _media_verify_secrets():
             return jsonify({"status": "error", "mensaje": "Servicio media no configurado"}), 503
         if not filename or Path(filename).name != filename or ".." in filename:
             return jsonify({"status": "error", "mensaje": "Archivo no encontrado"}), 404
@@ -617,8 +678,7 @@ def _register_routes(module):
         token = str(request.args.get("token") or "")
         if expires_int < int(time.time()):
             return jsonify({"status": "error", "mensaje": "Enlace expirado"}), 410
-        expected = _sign_media(filename, expires_int)
-        if not token or not hmac.compare_digest(expected, token):
+        if not _media_token_valido(filename, expires_int, token):
             return jsonify({"status": "error", "mensaje": "Enlace no autorizado"}), 403
         path = _MEDIA_DIR / filename
         if not path.is_file():

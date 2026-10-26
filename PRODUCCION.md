@@ -12,12 +12,17 @@ Configurar como variables de entorno:
 - `TOKEN_VERIFICACION`
 - `META_APP_SECRET` — obligatoria para aceptar webhooks de Meta
 - `LIQUIDADOR_API_URL=https://gestionjudicial.onrender.com`
-- `LIQUIDADOR_API_KEY` — misma clave configurada en el ERP
+- `BOT_API_KEY` — llave para `/api/bot/*` del ERP (mismo valor que `BOT_API_KEY` del ERP)
+- `RECAUDOS_API_KEY` — llave para `/api/recaudos/bot/*` del ERP (mismo valor que `RECAUDOS_API_KEY` del ERP)
+- `LIQUIDADOR_API_KEY` — HEREDADA, solo transición: se usa si falta `BOT_API_KEY`/`RECAUDOS_API_KEY`. Borrar al retirar la llave compartida.
+- `AGENT_SUPERVISION_KEY_NEXT` — opcional; llave "siguiente" para rotar la de supervisión sin corte
 - `AGENT_SUPERVISION_KEY` — clave independiente y compartida con el proxy de supervisión del ERP
 - `PUBLIC_BASE_URL` o `RENDER_EXTERNAL_URL` — base pública del bot (URLs firmadas de comprobantes en supervisión)
 - `BOT_MEDIA_DIR` (opcional; default `/tmp/bot_media_supervision`) — almacenamiento local de imágenes/documentos
 - `BOT_MEDIA_URL_TTL` (opcional; default `604800` = 7 días) — vigencia de `media_url` firmada
-- `BOT_MEDIA_PUBLIC_SECRET` (opcional; fallback `AGENT_SUPERVISION_KEY`) — firma HMAC de `/control/media/...`
+- `BOT_MEDIA_PUBLIC_SECRET` — secreto propio (distinto de `AGENT_SUPERVISION_KEY`) para firmar `/control/media/...`. Si falta, se usa el histórico (`AGENT_SUPERVISION_KEY`/`TOKEN_META`) solo mientras `BOT_MEDIA_LEGACY_FALLBACK` no sea `false`.
+- `BOT_MEDIA_PUBLIC_SECRET_PREVIOUS` — opcional; secreto anterior, solo para que los enlaces ya emitidos (7 días) sigan abriendo tras rotar. Borrar pasados 7 días.
+- `BOT_MEDIA_LEGACY_FALLBACK` — opcional; `false` retira el respaldo a `AGENT_SUPERVISION_KEY`/`TOKEN_META` para firmar y verificar media.
 
 No reutilizar `LIQUIDADOR_API_KEY` como clave de supervisión.
 
