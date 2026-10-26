@@ -12,7 +12,10 @@ Configurar como variables de entorno:
 - `TOKEN_VERIFICACION`
 - `META_APP_SECRET` — obligatoria para aceptar webhooks de Meta
 - `LIQUIDADOR_API_URL=https://gestionjudicial.onrender.com`
-- `LIQUIDADOR_API_KEY` — misma clave configurada en el ERP
+- `BOT_API_KEY` — llave para `/api/bot/*` del ERP (mismo valor que `BOT_API_KEY` del ERP)
+- `RECAUDOS_API_KEY` — llave para `/api/recaudos/bot/*` del ERP (mismo valor que `RECAUDOS_API_KEY` del ERP)
+- `LIQUIDADOR_API_KEY` — HEREDADA, solo transición: se usa si falta `BOT_API_KEY`/`RECAUDOS_API_KEY`. Borrar al retirar la llave compartida.
+- `AGENT_SUPERVISION_KEY_NEXT` — opcional; llave "siguiente" para rotar la de supervisión sin corte
 - `AGENT_SUPERVISION_KEY` — clave independiente y compartida con el proxy de supervisión del ERP
 - `PUBLIC_BASE_URL` o `RENDER_EXTERNAL_URL` — base pública del bot (URLs firmadas de comprobantes en supervisión)
 - `BOT_MEDIA_DIR` (opcional; default `/tmp/bot_media_supervision`) — almacenamiento local de imágenes/documentos

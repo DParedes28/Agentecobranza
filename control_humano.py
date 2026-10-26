@@ -19,6 +19,8 @@ from flask import jsonify, request, send_file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPERVISION_KEY = os.getenv("AGENT_SUPERVISION_KEY")
+# Llave "siguiente" opcional: permite rotar sin corte (se aceptan ambas hasta promover la nueva).
+SUPERVISION_KEY_NEXT = (os.getenv("AGENT_SUPERVISION_KEY_NEXT") or "").strip()
 TOKEN_META = os.getenv("TOKEN_META")
 _THREAD_STATE = threading.local()
 _MEDIA_DIR = Path(os.getenv("BOT_MEDIA_DIR") or "/tmp/bot_media_supervision")
@@ -406,10 +408,27 @@ def escalar_humano(telefono: str, motivo: str = "ESCALAR_HUMANO", usuario: str =
         return False
 
 
+def _supervision_keys_validas():
+    return [k for k in ((SUPERVISION_KEY or "").strip(), SUPERVISION_KEY_NEXT) if k]
+
+
+def _llave_supervision_valida(suministrada):
+    validas = _supervision_keys_validas()
+    if not suministrada or not validas:
+        return False
+    d_sum = hashlib.sha256(suministrada.encode("utf-8")).digest()
+    ok = False
+    for k in validas:
+        if hmac.compare_digest(d_sum, hashlib.sha256(k.encode("utf-8")).digest()):
+            ok = True
+    return ok
+
+
 def _auth():
-    if not SUPERVISION_KEY:
+    if not _supervision_keys_validas():
         return False, "AGENT_SUPERVISION_KEY no esta configurada"
-    return request.headers.get("X-Agent-Supervision-Key", "") == SUPERVISION_KEY, "No autorizado"
+    suministrada = request.headers.get("X-Agent-Supervision-Key", "")
+    return _llave_supervision_valida(suministrada), "No autorizado"
 
 
 def _fila_conversacion(row_tuple, nombres):

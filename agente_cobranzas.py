@@ -21,7 +21,19 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 LIQUIDADOR_API_URL = os.getenv("LIQUIDADOR_API_URL")
-LIQUIDADOR_API_KEY = os.getenv("LIQUIDADOR_API_KEY")
+LIQUIDADOR_API_KEY = (os.getenv("LIQUIDADOR_API_KEY") or "").strip() or None  # heredada (transición)
+ERP_BOT_API_KEY = (os.getenv("BOT_API_KEY") or "").strip() or None
+ERP_RECAUDOS_API_KEY = (os.getenv("RECAUDOS_API_KEY") or "").strip() or None
+
+
+def llave_erp_bot():
+    """Llave para /api/bot/* del ERP: la nueva si existe; si no, la heredada."""
+    return ERP_BOT_API_KEY or LIQUIDADOR_API_KEY
+
+
+def llave_erp_recaudos():
+    """Llave para /api/recaudos/bot/* del ERP: la nueva si existe; si no, la heredada."""
+    return ERP_RECAUDOS_API_KEY or LIQUIDADOR_API_KEY
 
 cliente_ia = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 memoria_chats = {}
@@ -57,8 +69,9 @@ def solicitar_liquidacion(inmueble_id, fecha_corte=None):
     fecha_corte = fecha_corte or fecha_colombia()
     url = f"{LIQUIDADOR_API_URL.rstrip('/')}/api/bot/liquidar"
     headers = {"Content-Type": "application/json"}
-    if LIQUIDADOR_API_KEY:
-        headers["X-API-Key"] = LIQUIDADOR_API_KEY
+    llave = llave_erp_bot()
+    if llave:
+        headers["X-API-Key"] = llave
     payload = {"inmueble_id": int(inmueble_id), "fecha_corte": fecha_corte}
     respuesta = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
     respuesta.raise_for_status()
@@ -80,8 +93,9 @@ def reportar_abono_al_erp(inmueble_id, valor, fecha_pago=None, banco="Transferen
         return None
     url = f"{LIQUIDADOR_API_URL.rstrip('/')}/api/recaudos/bot/abono"
     headers = {"Content-Type": "application/json"}
-    if LIQUIDADOR_API_KEY:
-        headers["X-API-Key"] = LIQUIDADOR_API_KEY
+    llave = llave_erp_recaudos()
+    if llave:
+        headers["X-API-Key"] = llave
     payload = {
         "inmueble_id": int(inmueble_id),
         "valor": float(valor),
@@ -269,7 +283,7 @@ def health():
         "TOKEN_VERIFICACION": TOKEN_VERIFICACION,
         "META_APP_SECRET": META_APP_SECRET,
         "LIQUIDADOR_API_URL": LIQUIDADOR_API_URL,
-        "LIQUIDADOR_API_KEY": LIQUIDADOR_API_KEY,
+        "BOT_API_KEY (o LIQUIDADOR_API_KEY heredada)": llave_erp_bot(),
     }
     missing = [name for name, value in required.items() if not value]
     status = 200 if not missing else 503
